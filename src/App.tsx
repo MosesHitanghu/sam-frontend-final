@@ -4,14 +4,14 @@ import "@fontsource/poppins/400.css";
 import "@fontsource/poppins/500.css";
 import "@fontsource/poppins/700.css";
 
-import type { FormEvent, ReactNode } from "react";
+import type { FormEvent, MouseEvent, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import type { Dayjs } from "dayjs";
 import {
+  Alert,
   AppBar,
   Box,
   Button,
-  ButtonGroup,
   Card,
   CardContent,
   CardMedia,
@@ -25,12 +25,24 @@ import {
   MenuItem,
   Paper,
   InputAdornment,
+  Snackbar,
+  Tab,
+  Tabs,
   TextField,
   Toolbar,
   Typography,
+  Stack,
 } from "@mui/material";
+import { isAxiosError } from "axios";
 import { DatePicker, TimePicker } from "@mui/x-date-pickers";
 import MenuIcon from "@mui/icons-material/Menu";
+import MoreVertIcon from "@mui/icons-material/MoreVert";
+import CancelIcon from "@mui/icons-material/Cancel";
+import BlockIcon from "@mui/icons-material/Block";
+import DeleteIcon from "@mui/icons-material/Delete";
+import EditIcon from "@mui/icons-material/Edit";
+import StarIcon from "@mui/icons-material/Star";
+import SellIcon from "@mui/icons-material/Sell";
 import HomeIcon from "@mui/icons-material/Home";
 import PlaceOutlinedIcon from "@mui/icons-material/PlaceOutlined";
 import PhoneOutlinedIcon from "@mui/icons-material/PhoneOutlined";
@@ -40,27 +52,35 @@ import AutoAwesomeOutlinedIcon from "@mui/icons-material/AutoAwesomeOutlined";
 import GoogleIcon from "@mui/icons-material/Google";
 import CallMadeOutlinedIcon from "@mui/icons-material/CallMadeOutlined";
 import CheckCircleOutlineOutlinedIcon from "@mui/icons-material/CheckCircleOutlineOutlined";
-import HomeWorkOutlinedIcon from "@mui/icons-material/HomeWorkOutlined";
-import Groups2OutlinedIcon from "@mui/icons-material/Groups2Outlined";
-import FavoriteBorderOutlinedIcon from "@mui/icons-material/FavoriteBorderOutlined";
-import EventAvailableOutlinedIcon from "@mui/icons-material/EventAvailableOutlined";
-import LocalOfferOutlinedIcon from "@mui/icons-material/LocalOfferOutlined";
-import DescriptionOutlinedIcon from "@mui/icons-material/DescriptionOutlined";
-import ReceiptLongOutlinedIcon from "@mui/icons-material/ReceiptLongOutlined";
-import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
-import AnalyticsOutlinedIcon from "@mui/icons-material/AnalyticsOutlined";
+import HomeWorkIcon from "@mui/icons-material/HomeWork";
+import Groups2Icon from "@mui/icons-material/Groups2";
+import FavoriteIcon from "@mui/icons-material/Favorite";
+import EventAvailableIcon from "@mui/icons-material/EventAvailable";
+import LocalOfferIcon from "@mui/icons-material/LocalOffer";
+import DescriptionIcon from "@mui/icons-material/Description";
+import ReceiptLongIcon from "@mui/icons-material/ReceiptLong";
+import SettingsIcon from "@mui/icons-material/Settings";
+import AnalyticsIcon from "@mui/icons-material/Analytics";
 import PersonOutlineOutlinedIcon from "@mui/icons-material/PersonOutlineOutlined";
 import PersonIcon from "@mui/icons-material/Person";
 import DashboardOutlinedIcon from "@mui/icons-material/DashboardOutlined";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
+import SearchIcon from "@mui/icons-material/Search";
 import EmailOutlinedIcon from "@mui/icons-material/EmailOutlined";
 import FacebookOutlinedIcon from "@mui/icons-material/FacebookOutlined";
 import LinkedInIcon from "@mui/icons-material/LinkedIn";
 import XIcon from "@mui/icons-material/X";
 import MusicNoteOutlinedIcon from "@mui/icons-material/MusicNoteOutlined";
-import { Link, Route, Routes, useLocation } from "react-router-dom";
+import VerifiedIcon from "@mui/icons-material/Verified";
+import {
+  Link,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import logo from "./assets/logo1.jpeg";
 import hero1 from "./assets/hero/banner-1.jpg";
 import hero2 from "./assets/hero/banner-2.jpg";
@@ -71,6 +91,7 @@ import { api } from "./api";
 
 type Role = "super_admin" | "admin" | "agent" | "customer";
 type DrawerMode = "login" | "signup" | "profile" | null;
+type AlertSeverity = "success" | "error";
 
 type User = {
   id: number;
@@ -78,8 +99,18 @@ type User = {
   phone_number?: string | null;
   role: Role;
   status: string;
+  first_name?: string | null;
+  last_name?: string | null;
+  full_name?: string | null;
+  profile_picture?: string | null;
   address?: string | null;
+  district?: string | null;
+  village?: string | null;
+  experience?: string | null;
+  sales_closed?: number;
   nationality?: string | null;
+  created_at?: string;
+  updated_at?: string;
 };
 
 type Listing = {
@@ -95,6 +126,7 @@ type Listing = {
   status: string;
   is_featured: boolean;
   total_views: number;
+  owner_id: number;
   created_at: string;
   thumbnail_url?: string | null;
 };
@@ -129,6 +161,64 @@ type ListingViewResponse = {
   total_views: number;
   counted: boolean;
 };
+
+type Wish = {
+  id: number;
+  title: string;
+  description: string;
+  purpose?: string | null;
+  district?: string | null;
+  size_range?: string | null;
+  customer_name: string;
+  customer_email: string;
+  customer_mobile_number: string;
+  status: string;
+  created_at?: string;
+};
+
+type Offer = {
+  id: number;
+  amount: number;
+  full_name: string;
+  mobile_number: string;
+  email: string;
+  status: string;
+  listing_id: number;
+  created_at?: string;
+};
+
+type SiteVisit = {
+  id: number;
+  listing_id: number;
+  customer_name: string;
+  customer_email: string;
+  customer_mobile_number: string;
+  scheduled_date: string;
+  scheduled_time: string;
+  message?: string | null;
+  status: string;
+  created_at?: string;
+};
+
+type AuditLog = {
+  id: number;
+  action: string;
+  entity_type: string;
+  description: string;
+  created_at: string;
+};
+
+type FormAlertState = {
+  open: boolean;
+  severity: AlertSeverity;
+  message: string;
+};
+
+const AUTH_STORAGE_KEY = "sam_auth_user";
+const DASHBOARD_MENU_STORAGE_KEY = "sam_dashboard_menu";
+const HOME_LISTINGS_BATCH_SIZE = 3;
+const LISTINGS_BATCH_SIZE = 6;
+const AGENTS_BATCH_SIZE = 8;
 
 const imageMap: Record<string, string> = {
   "/src/assets/hero/banner-1.jpg": hero1,
@@ -180,22 +270,35 @@ const adminMenu = [
 ];
 const superAdminMenu = [...adminMenu, "Audit logs", "Settings"];
 const dashboardMenuIcons: Record<string, ReactNode> = {
-  Listings: <HomeWorkOutlinedIcon fontSize="small" />,
-  Agents: <Groups2OutlinedIcon fontSize="small" />,
-  Wishes: <FavoriteBorderOutlinedIcon fontSize="small" />,
-  "Site Visits": <EventAvailableOutlinedIcon fontSize="small" />,
-  Offers: <LocalOfferOutlinedIcon fontSize="small" />,
-  Reports: <DescriptionOutlinedIcon fontSize="small" />,
-  "Audit logs": <ReceiptLongOutlinedIcon fontSize="small" />,
-  Settings: <SettingsOutlinedIcon fontSize="small" />,
-  "My Listings": <HomeWorkOutlinedIcon fontSize="small" />,
-  Analytics: <AnalyticsOutlinedIcon fontSize="small" />,
+  Listings: <HomeWorkIcon fontSize="small" />,
+  Agents: <Groups2Icon fontSize="small" />,
+  Wishes: <FavoriteIcon fontSize="small" />,
+  "Site Visits": <EventAvailableIcon fontSize="small" />,
+  Offers: <LocalOfferIcon fontSize="small" />,
+  Reports: <DescriptionIcon fontSize="small" />,
+  "Audit logs": <ReceiptLongIcon fontSize="small" />,
+  Settings: <SettingsIcon fontSize="small" />,
+  "My Listings": <HomeWorkIcon fontSize="small" />,
+  Analytics: <AnalyticsIcon fontSize="small" />,
   Profile: <PersonOutlineOutlinedIcon fontSize="small" />,
 };
+
+const defaultAgentThumbnails = [
+  "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=900&q=80",
+  "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=900&q=80",
+  "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=900&q=80",
+  "https://images.unsplash.com/photo-1488426862026-3ee34a7d66df?auto=format&fit=crop&w=900&q=80",
+  "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=900&q=80",
+];
 
 function resolveImage(path?: string | null) {
   if (!path) return hero4;
   return imageMap[path] ?? path;
+}
+
+function resolveAgentImage(path?: string | null, seed = 0) {
+  if (path) return path;
+  return defaultAgentThumbnails[seed % defaultAgentThumbnails.length];
 }
 
 function formatPrice(value: number) {
@@ -231,6 +334,11 @@ function formatTimeSincePosted(value: string) {
   return `${Math.max(1, diffYears)} year${diffYears === 1 ? "" : "s"} ago`;
 }
 
+function formatMemberDuration(value?: string) {
+  if (!value) return "Member for recently joined";
+  return `Joined ${formatTimeSincePosted(value)}`;
+}
+
 function ListingCard({
   listing,
   onOpenSiteVisit,
@@ -244,6 +352,7 @@ function ListingCard({
 }) {
   return (
     <Card
+      className="listing-card"
       elevation={2}
       onClickCapture={() => onRegisterView(listing.id)}
       sx={{
@@ -372,12 +481,12 @@ type HomePageProps = {
   latestListings: Listing[];
   heroSlides: HeroSlide[];
   listingsLoading: boolean;
+  homeListingsTab: "featured" | "all";
   filters: {
     district: string;
     minPrice: string;
     maxPrice: string;
   };
-  listingLimit: number;
   slideIndex: number;
   setFilters: React.Dispatch<
     React.SetStateAction<{
@@ -386,7 +495,9 @@ type HomePageProps = {
       maxPrice: string;
     }>
   >;
-  setListingLimit: React.Dispatch<React.SetStateAction<number>>;
+  setHomeListingsTab: React.Dispatch<
+    React.SetStateAction<"featured" | "all">
+  >;
   setSlideIndex: React.Dispatch<React.SetStateAction<number>>;
   handleFilterSubmit: (event: FormEvent) => void;
   showPreviousSlide: () => void;
@@ -402,11 +513,11 @@ function HomePage({
   latestListings,
   heroSlides,
   listingsLoading,
+  homeListingsTab,
   filters,
-  listingLimit,
   slideIndex,
   setFilters,
-  setListingLimit,
+  setHomeListingsTab,
   setSlideIndex,
   handleFilterSubmit,
   showPreviousSlide,
@@ -416,7 +527,59 @@ function HomePage({
   onOpenOffer,
   onRegisterView,
 }: HomePageProps) {
+  const homeListingsSectionRef = useRef<HTMLDivElement | null>(null);
   const activeSlide = heroSlides[slideIndex] ?? fallbackHero[0];
+  const [visibleHomeListingsCount, setVisibleHomeListingsCount] = useState(
+    HOME_LISTINGS_BATCH_SIZE,
+  );
+  const featuredHomeListings = featuredListings.filter(
+    (listing) => listing.is_featured,
+  );
+  const allHomeListings = Array.from(
+    new Map(
+      [...latestListings, ...featuredListings].map((listing) => [
+        listing.id,
+        listing,
+      ]),
+    ).values(),
+  );
+  const homeSourceListings =
+    homeListingsTab === "featured" ? featuredHomeListings : allHomeListings;
+  const visibleHomeListings = homeSourceListings.slice(0, visibleHomeListingsCount);
+
+  useEffect(() => {
+    setVisibleHomeListingsCount(HOME_LISTINGS_BATCH_SIZE);
+  }, [homeListingsTab, featuredHomeListings.length, allHomeListings.length]);
+
+  useEffect(() => {
+    const target = homeListingsSectionRef.current;
+    if (!target || listingsLoading || homeSourceListings.length <= visibleHomeListingsCount) {
+      return;
+    }
+
+    const maybeLoadMore = () => {
+      const rect = target.getBoundingClientRect();
+      if (rect.bottom - window.innerHeight > 220) return;
+
+      setVisibleHomeListingsCount((current) => {
+        if (current >= homeSourceListings.length) {
+          return current;
+        }
+        return Math.min(
+          current + HOME_LISTINGS_BATCH_SIZE,
+          homeSourceListings.length,
+        );
+      });
+    };
+
+    maybeLoadMore();
+    window.addEventListener("scroll", maybeLoadMore, { passive: true });
+    window.addEventListener("resize", maybeLoadMore);
+    return () => {
+      window.removeEventListener("scroll", maybeLoadMore);
+      window.removeEventListener("resize", maybeLoadMore);
+    };
+  }, [homeSourceListings.length, listingsLoading, visibleHomeListingsCount]);
 
   return (
     <>
@@ -587,64 +750,82 @@ function HomePage({
         </Paper>
       </Container>
 
-      <Container maxWidth="xl" sx={{ py: 8 }}>
-        <section>
-          <Typography variant="h3" sx={{ mb: 1 }}>
-            Featured listings
-          </Typography>
-          <Typography color="text.secondary" sx={{ mb: 3 }}>
-            Curated property highlights with verified details and strong buyer
-            demand.
-          </Typography>
-          {listingsLoading ? (
-            <ListingCardLoader count={4} className="home-listing-grid" />
-          ) : (
-            <div className="home-listing-grid">
-              {featuredListings.slice(0, 4).map((listing) => (
-                <ListingCard
-                  key={listing.id}
-                  listing={listing}
-                  onOpenSiteVisit={onOpenSiteVisit}
-                  onOpenOffer={onOpenOffer}
-                  onRegisterView={onRegisterView}
-                />
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="section-gap">
-          <Typography variant="h3" sx={{ mb: 1 }}>
-            Latest listings
-          </Typography>
-          <Typography color="text.secondary" sx={{ mb: 3 }}>
-            Listings appear in three columns and extend with lazy loading.
-          </Typography>
-          {listingsLoading ? (
-            <ListingCardLoader count={4} className="home-listing-grid" />
-          ) : (
-            <div className="home-listing-grid">
-              {latestListings.slice(0, listingLimit).map((listing) => (
-                <ListingCard
-                  key={listing.id}
-                  listing={listing}
-                  onOpenSiteVisit={onOpenSiteVisit}
-                  onOpenOffer={onOpenOffer}
-                  onRegisterView={onRegisterView}
-                />
-              ))}
-            </div>
-          )}
-          {listingLimit < latestListings.length ? (
-            <Box sx={{ display: "flex", justifyContent: "center", mt: 4 }}>
-              <Button
-                variant="outlined"
-                onClick={() => setListingLimit((count) => count + 3)}
-              >
-                Load more listings
-              </Button>
-            </Box>
-          ) : null}
+      <Container maxWidth="xl" sx={{ pt: 8, pb: 1 }}>
+        <section ref={homeListingsSectionRef}>
+          <Paper className="home-listings-table-shell">
+            <Tabs
+              value={homeListingsTab}
+              onChange={(_, value: "featured" | "all") =>
+                setHomeListingsTab(value)
+              }
+              textColor="primary"
+              indicatorColor="primary"
+              sx={{ px: 2, pt: 2, mb: 3 }}
+            >
+              <Tab value="featured" label="Featured for You" />
+              <Tab value="all" label="All" />
+            </Tabs>
+            {listingsLoading ? (
+              <ListingCardLoader count={4} className="home-listing-grid" />
+            ) : (
+              <>
+                {homeListingsTab === "featured" ? (
+                  visibleHomeListings.length ? (
+                    <div
+                      key="featured-home-listings"
+                      className="home-listing-grid home-listings-tab-content"
+                    >
+                      {visibleHomeListings.map((listing) => (
+                        <ListingCard
+                          key={listing.id}
+                          listing={listing}
+                          onOpenSiteVisit={onOpenSiteVisit}
+                          onOpenOffer={onOpenOffer}
+                          onRegisterView={onRegisterView}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <Box className="dashboard-empty-state">
+                      <Typography variant="h6">No listings available.</Typography>
+                      <Typography color="text.secondary">
+                        There are no featured listings to show right now.
+                      </Typography>
+                    </Box>
+                  )
+                ) : (
+                  visibleHomeListings.length ? (
+                    <div
+                      key="all-home-listings"
+                      className="home-listing-grid home-listings-tab-content"
+                    >
+                      {visibleHomeListings.map((listing) => (
+                        <ListingCard
+                          key={listing.id}
+                          listing={listing}
+                          onOpenSiteVisit={onOpenSiteVisit}
+                          onOpenOffer={onOpenOffer}
+                          onRegisterView={onRegisterView}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <Box className="dashboard-empty-state">
+                      <Typography variant="h6">No listings available.</Typography>
+                      <Typography color="text.secondary">
+                        There are no listings matching the current filters.
+                      </Typography>
+                    </Box>
+                  )
+                )}
+                {homeSourceListings.length > visibleHomeListings.length ? (
+                  <Box className="dashboard-load-more-trigger">
+                    <CircularProgress size={24} color="warning" />
+                  </Box>
+                ) : null}
+              </>
+            )}
+          </Paper>
         </section>
       </Container>
     </>
@@ -913,12 +1094,19 @@ function BonusInfoPage({ bonusSections }: { bonusSections: BonusSection[] }) {
 
 function App() {
   const location = useLocation();
+  const navigate = useNavigate();
   const viewedListingIdsRef = useRef<Set<number>>(new Set());
+  const listingsLoadMoreRef = useRef<HTMLDivElement | null>(null);
+  const agentsLoadMoreRef = useRef<HTMLDivElement | null>(null);
   const [aboutAnchor, setAboutAnchor] = useState<HTMLElement | null>(null);
   const [accountAnchor, setAccountAnchor] = useState<HTMLElement | null>(null);
   const [mobileNavAnchor, setMobileNavAnchor] = useState<HTMLElement | null>(
     null,
   );
+  const [agentActionAnchor, setAgentActionAnchor] =
+    useState<HTMLElement | null>(null);
+  const [listingActionAnchor, setListingActionAnchor] =
+    useState<HTMLElement | null>(null);
   const [drawerMode, setDrawerMode] = useState<DrawerMode>(null);
   const [heroSlides, setHeroSlides] = useState<HeroSlide[]>(fallbackHero);
   const [featuredListings, setFeaturedListings] = useState<Listing[]>([]);
@@ -929,11 +1117,28 @@ function App() {
   const [bonusSections, setBonusSections] =
     useState<BonusSection[]>(fallbackBonus);
   const [user, setUser] = useState<User | null>(null);
+  const [usersDirectory, setUsersDirectory] = useState<User[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [agents, setAgents] = useState<User[]>([]);
+  const [wishes, setWishes] = useState<Wish[]>([]);
+  const [offers, setOffers] = useState<Offer[]>([]);
+  const [siteVisits, setSiteVisits] = useState<SiteVisit[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [selectedMenu, setSelectedMenu] = useState("Listings");
+  const [selectedMenu, setSelectedMenu] = useState(() => {
+    return window.localStorage.getItem(DASHBOARD_MENU_STORAGE_KEY) ?? "Listings";
+  });
+  const [listingsTab, setListingsTab] = useState<"all" | "for-you">("all");
+  const [listingSearch, setListingSearch] = useState("");
+  const [visibleListingsCount, setVisibleListingsCount] =
+    useState(LISTINGS_BATCH_SIZE);
+  const [agentSearch, setAgentSearch] = useState("");
+  const [visibleAgentsCount, setVisibleAgentsCount] =
+    useState(AGENTS_BATCH_SIZE);
   const [slideIndex, setSlideIndex] = useState(0);
-  const [listingLimit, setListingLimit] = useState(6);
+  const [homeListingsTab, setHomeListingsTab] = useState<"featured" | "all">(
+    "featured",
+  );
   const [filters, setFilters] = useState({
     district: "",
     minPrice: "",
@@ -958,6 +1163,7 @@ function App() {
   const [siteVisitDrawerOpen, setSiteVisitDrawerOpen] = useState(false);
   const [offerDrawerOpen, setOfferDrawerOpen] = useState(false);
   const [selectedListing, setSelectedListing] = useState<Listing | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState<User | null>(null);
   const [wishForm, setWishForm] = useState({
     title: "",
     description: "",
@@ -984,6 +1190,26 @@ function App() {
     mobile_number: "",
     email: "",
   });
+  const [formAlert, setFormAlert] = useState<FormAlertState>({
+    open: false,
+    severity: "success",
+    message: "",
+  });
+  const [authReady, setAuthReady] = useState(false);
+  const isDashboardRoute = location.pathname === "/dashboard";
+
+  useEffect(() => {
+    try {
+      const storedUser = window.localStorage.getItem(AUTH_STORAGE_KEY);
+      if (storedUser) {
+        setUser(JSON.parse(storedUser) as User);
+      }
+    } catch {
+      window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    } finally {
+      setAuthReady(true);
+    }
+  }, []);
 
   useEffect(() => {
     void loadPublicContent();
@@ -1007,6 +1233,29 @@ function App() {
   }, [user]);
 
   useEffect(() => {
+    if (!authReady) return;
+
+    if (user) {
+      window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
+      return;
+    }
+
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+  }, [authReady, user]);
+
+  useEffect(() => {
+    window.localStorage.setItem(DASHBOARD_MENU_STORAGE_KEY, selectedMenu);
+  }, [selectedMenu]);
+
+  useEffect(() => {
+    setVisibleListingsCount(LISTINGS_BATCH_SIZE);
+  }, [listingSearch, listingsTab, selectedMenu]);
+
+  useEffect(() => {
+    setVisibleAgentsCount(AGENTS_BATCH_SIZE);
+  }, [agentSearch, selectedMenu]);
+
+  useEffect(() => {
     const menuItems =
       user?.role === "super_admin"
         ? superAdminMenu
@@ -1027,6 +1276,69 @@ function App() {
 
   function showNextSlide() {
     setSlideIndex((current) => (current + 1) % heroSlides.length);
+  }
+
+  function showFormAlert(severity: AlertSeverity, message: string) {
+    setFormAlert({
+      open: true,
+      severity,
+      message,
+    });
+  }
+
+  function closeFormAlert() {
+    setFormAlert((current) => ({ ...current, open: false }));
+  }
+
+  function logout() {
+    setUser(null);
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    navigate("/");
+  }
+
+  function getUserDisplayName(account: User | null | undefined) {
+    if (!account) return "";
+
+    return (
+      account.full_name ||
+      `${account.first_name || ""} ${account.last_name || ""}`.trim() ||
+      account.email
+    );
+  }
+
+  const listingAuthorsByOwnerId = new Map<number, User>();
+  if (user) {
+    listingAuthorsByOwnerId.set(user.id, user);
+  }
+  for (const account of usersDirectory) {
+    listingAuthorsByOwnerId.set(account.id, account);
+  }
+
+  function getListingAuthorName(listing: Listing) {
+    return getUserDisplayName(listingAuthorsByOwnerId.get(listing.owner_id));
+  }
+
+  function getListingAuthor(listing: Listing) {
+    return listingAuthorsByOwnerId.get(listing.owner_id);
+  }
+
+  function getListingOfferCount(listingId: number) {
+    return offers.filter((offer) => offer.listing_id === listingId).length;
+  }
+
+  function getListingSiteVisitCount(listingId: number) {
+    return siteVisits.filter((visit) => visit.listing_id === listingId).length;
+  }
+
+  function getApiErrorMessage(error: unknown, fallback: string) {
+    if (
+      isAxiosError<{ detail?: string }>(error) &&
+      typeof error.response?.data?.detail === "string"
+    ) {
+      return error.response.data.detail;
+    }
+
+    return fallback;
   }
 
   async function loadPublicContent(currentFilters?: typeof filters) {
@@ -1079,7 +1391,7 @@ function App() {
     setListingsLoading(true);
 
     try {
-      const [statsResponse, listingsResponse] = await Promise.all([
+      const dashboardRequests = [
         api.get<DashboardStats>(
           `/dashboard/${activeUser.role}/${activeUser.id}`,
         ),
@@ -1090,10 +1402,52 @@ function App() {
             role: activeUser.role,
           },
         }),
-      ]);
+        api.get<Offer[]>("/offers"),
+        api.get<SiteVisit[]>("/site-visits"),
+      ] as const;
 
-      setStats(statsResponse.data);
-      setLatestListings(listingsResponse.data);
+      if (activeUser.role === "admin" || activeUser.role === "super_admin") {
+        const [
+          statsResponse,
+          listingsResponse,
+          offersResponse,
+          siteVisitsResponse,
+          usersResponse,
+          wishesResponse,
+          auditLogsResponse,
+        ] = await Promise.all([
+          ...dashboardRequests,
+          api.get<User[]>("/users"),
+          api.get<Wish[]>("/wishes"),
+          api.get<AuditLog[]>("/audit-logs"),
+        ]);
+
+        setStats(statsResponse.data);
+        setLatestListings(listingsResponse.data);
+        setOffers(offersResponse.data);
+        setSiteVisits(siteVisitsResponse.data);
+        setUsersDirectory(usersResponse.data);
+        setAgents(
+          usersResponse.data.filter((account) => account.role === "agent"),
+        );
+        setWishes(wishesResponse.data);
+        setAuditLogs(auditLogsResponse.data);
+      } else {
+        const [
+          statsResponse,
+          listingsResponse,
+          offersResponse,
+          siteVisitsResponse,
+        ] =
+          await Promise.all(dashboardRequests);
+
+        setStats(statsResponse.data);
+        setLatestListings(listingsResponse.data);
+        setOffers(offersResponse.data);
+        setSiteVisits(siteVisitsResponse.data);
+        setUsersDirectory([activeUser]);
+        setAgents([]);
+      }
     } finally {
       setDashboardLoading(false);
       setListingsLoading(false);
@@ -1102,35 +1456,163 @@ function App() {
 
   async function handleLogin(event: FormEvent) {
     event.preventDefault();
-    const response = await api.post<{ user: User }>("/auth/login", loginForm);
-    setUser(response.data.user);
-    setDrawerMode(response.data.user.address ? null : "profile");
+    try {
+      const response = await api.post<{ user: User }>("/auth/login", loginForm);
+      setUser(response.data.user);
+      setSelectedMenu(
+        response.data.user.role === "agent" ? "My Listings" : "Listings",
+      );
+      setDrawerMode(response.data.user.address ? "profile" : null);
+      navigate("/dashboard");
+    } catch (error) {
+      const message = getApiErrorMessage(
+        error,
+        "Username or password is incorrect.",
+      );
+      showFormAlert(
+        "error",
+        message === "Invalid credentials"
+          ? "Username or password is incorrect."
+          : message,
+      );
+    }
   }
+
+  const normalizedListingSearch = listingSearch.trim().toLowerCase();
+  const filteredDashboardListings = (
+    listingsTab === "for-you"
+      ? latestListings.filter((listing) => listing.owner_id === user?.id)
+      : latestListings
+  ).filter((listing) => {
+    if (!normalizedListingSearch) return true;
+
+    const searchableText = [
+      listing.title,
+      getListingAuthorName(listing),
+      listing.size_text,
+      listing.district,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    return searchableText.includes(normalizedListingSearch);
+  });
+
+  const visibleDashboardListings = filteredDashboardListings.slice(
+    0,
+    visibleListingsCount,
+  );
+
+  const normalizedAgentSearch = agentSearch.trim().toLowerCase();
+  const filteredAgents = agents.filter((agent) => {
+    if (!normalizedAgentSearch) return true;
+
+    const searchableText = [
+      agent.full_name,
+      agent.first_name,
+      agent.last_name,
+      agent.email,
+      agent.address,
+      agent.phone_number,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    return searchableText.includes(normalizedAgentSearch);
+  });
+
+  const visibleAgents = filteredAgents.slice(0, visibleAgentsCount);
+
+  useEffect(() => {
+    if (selectedMenu !== "Listings") return;
+
+    const target = listingsLoadMoreRef.current;
+    if (!target || filteredDashboardListings.length <= visibleListingsCount) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries[0]?.isIntersecting) return;
+
+        setVisibleListingsCount((current) =>
+          Math.min(current + LISTINGS_BATCH_SIZE, filteredDashboardListings.length),
+        );
+      },
+      { rootMargin: "200px" },
+    );
+
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [filteredDashboardListings.length, selectedMenu, visibleListingsCount]);
+
+  useEffect(() => {
+    if (selectedMenu !== "Agents") return;
+
+    const target = agentsLoadMoreRef.current;
+    if (!target || filteredAgents.length <= visibleAgentsCount) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries[0]?.isIntersecting) return;
+
+        setVisibleAgentsCount((current) =>
+          Math.min(current + AGENTS_BATCH_SIZE, filteredAgents.length),
+        );
+      },
+      { rootMargin: "200px" },
+    );
+
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [filteredAgents.length, selectedMenu, visibleAgentsCount]);
 
   async function handleSignup(event: FormEvent) {
     event.preventDefault();
-    await api.post("/auth/agents/signup", signupForm);
-    setDrawerMode("login");
-    setLoginForm({
-      identifier: signupForm.email,
-      password: signupForm.password,
-    });
+    try {
+      await api.post("/auth/agents/signup", signupForm);
+      setDrawerMode("login");
+      setLoginForm({
+        identifier: signupForm.email,
+        password: signupForm.password,
+      });
+      showFormAlert(
+        "success",
+        "Agent signup saved successfully. Your application is pending approval.",
+      );
+    } catch (error) {
+      showFormAlert(
+        "error",
+        getApiErrorMessage(error, "Unable to submit your signup right now."),
+      );
+    }
   }
 
-  function handleProfileSave(event: FormEvent) {
+  async function handleProfileSave(event: FormEvent) {
     event.preventDefault();
     if (!user) return;
-    setUser({
-      ...user,
-      address: profileForm.address,
-      nationality: profileForm.nationality,
-    });
-    setDrawerMode(null);
+    try {
+      const response = await api.patch<User>(`/users/${user.id}`, {
+        address: profileForm.address,
+        nationality: profileForm.nationality,
+      });
+      setUser(response.data);
+      setDrawerMode(null);
+      showFormAlert("success", "Profile saved successfully in the database.");
+    } catch (error) {
+      showFormAlert(
+        "error",
+        getApiErrorMessage(error, "Unable to save your profile right now."),
+      );
+    }
   }
 
   function handleFilterSubmit(event: FormEvent) {
     event.preventDefault();
-    setListingLimit(6);
     void loadPublicContent(filters);
   }
 
@@ -1195,6 +1677,74 @@ function App() {
     setMobileNavAnchor(null);
   }
 
+  function handleAgentActionOpen(
+    event: MouseEvent<HTMLElement>,
+    agent: User,
+  ) {
+    event.stopPropagation();
+    setAgentActionAnchor(event.currentTarget);
+    setSelectedAgent(agent);
+  }
+
+  function handleAgentActionClose() {
+    setAgentActionAnchor(null);
+    setSelectedAgent(null);
+  }
+
+  function handleListingActionOpen(
+    event: MouseEvent<HTMLElement>,
+    _listing: Listing,
+  ) {
+    event.stopPropagation();
+    setListingActionAnchor(event.currentTarget);
+  }
+
+  function handleListingActionClose() {
+    setListingActionAnchor(null);
+  }
+
+  async function refreshAgents() {
+    const response = await api.get<User[]>("/users", {
+      params: { role: "agent" },
+    });
+    setAgents(response.data);
+  }
+
+  async function handleAgentAction(
+    action: "approve" | "reject" | "deactivate" | "delete",
+  ) {
+    if (!selectedAgent) return;
+
+    const agent = selectedAgent;
+    handleAgentActionClose();
+
+    try {
+      if (action === "approve") {
+        await api.patch(`/users/${agent.id}/approve`);
+        showFormAlert("success", `${agent.full_name || agent.email} approved.`);
+      } else if (action === "reject") {
+        await api.patch(`/users/${agent.id}/reject`);
+        showFormAlert("success", `${agent.full_name || agent.email} rejected.`);
+      } else if (action === "deactivate") {
+        await api.patch(`/users/${agent.id}/deactivate`);
+        showFormAlert(
+          "success",
+          `${agent.full_name || agent.email} deactivated.`,
+        );
+      } else {
+        await api.delete(`/users/${agent.id}`);
+        showFormAlert("success", `${agent.full_name || agent.email} deleted.`);
+      }
+
+      await refreshAgents();
+    } catch (error) {
+      showFormAlert(
+        "error",
+        getApiErrorMessage(error, `Unable to ${action} this profile right now.`),
+      );
+    }
+  }
+
   const appbarNavButtonSx = {
     color: "rgba(17,17,17,0.82)",
     transition: "color 180ms ease, background-color 180ms ease",
@@ -1252,65 +1802,439 @@ function App() {
     setSelectedListing(null);
   }
 
+  function getDashboardMenuItems(activeUser: User) {
+    return activeUser.role === "super_admin"
+      ? superAdminMenu
+      : activeUser.role === "admin"
+        ? adminMenu
+        : ["My Listings", "Analytics", "Profile"];
+  }
+
+  function renderDashboardPanel() {
+    if (!user) return null;
+
+    const infoPanel = (title: string, body: string) => (
+      <Paper className="priority-card">
+        <Typography variant="h5" sx={{ mb: 2 }}>
+          {title}
+        </Typography>
+        <Typography color="text.secondary">{body}</Typography>
+      </Paper>
+    );
+
+    if (user.role === "agent") {
+      if (selectedMenu === "Analytics") {
+        return infoPanel(
+          "Performance overview",
+          "Track your active listings, views, sales and engagement in one place as your pipeline grows.",
+        );
+      }
+
+      if (selectedMenu === "Profile") {
+        return (
+          <Paper className="priority-card">
+            <Typography variant="h5" sx={{ mb: 2 }}>
+              Agent profile
+            </Typography>
+            <div className="bullet-list">
+              <Chip label={`Name: ${user.email.split("@")[0] || "Agent"}`} />
+              <Chip label={`Email: ${user.email}`} />
+              <Chip label={`Phone: ${user.phone_number || "Not added"}`} />
+              <Chip label={`Address: ${user.address || "Not added"}`} />
+            </div>
+          </Paper>
+        );
+      }
+
+      return listingsLoading ? (
+        <ListingCardLoader count={3} className="listing-grid" />
+      ) : (
+        <div className="listing-grid">
+          {latestListings.map((listing) => (
+            <DashboardListingCard
+              key={listing.id}
+              listing={listing}
+              authorName={getListingAuthorName(listing)}
+              authorApproved={["approved", "active"].includes(
+                getListingAuthor(listing)?.status ?? "",
+              )}
+              offerCount={getListingOfferCount(listing.id)}
+              siteVisitCount={getListingSiteVisitCount(listing.id)}
+              onRegisterView={registerListingView}
+              onOpenActions={handleListingActionOpen}
+            />
+          ))}
+        </div>
+      );
+    }
+
+    if (selectedMenu === "Listings") {
+      return listingsLoading ? (
+        <ListingCardLoader count={3} className="listing-grid" />
+      ) : (
+        <Paper className="priority-card dashboard-listings-panel">
+          <Tabs
+            value={listingsTab}
+            onChange={(_, value: "all" | "for-you") => setListingsTab(value)}
+            textColor="primary"
+            indicatorColor="primary"
+            sx={{ mb: 3 }}
+          >
+            <Tab value="all" label="All" />
+            <Tab value="for-you" label="For You" />
+          </Tabs>
+          {visibleDashboardListings.length ? (
+            <div className="listing-grid">
+              {visibleDashboardListings.map((listing) => (
+                <DashboardListingCard
+                  key={listing.id}
+                  listing={listing}
+                  authorName={getListingAuthorName(listing)}
+                  authorApproved={["approved", "active"].includes(
+                    getListingAuthor(listing)?.status ?? "",
+                  )}
+                  offerCount={getListingOfferCount(listing.id)}
+                  siteVisitCount={getListingSiteVisitCount(listing.id)}
+                  onRegisterView={registerListingView}
+                  onOpenActions={handleListingActionOpen}
+                />
+              ))}
+            </div>
+          ) : (
+            <Box className="dashboard-empty-state">
+              <Typography variant="h6">No listings here yet.</Typography>
+              <Typography color="text.secondary">
+                {normalizedListingSearch
+                  ? "No listings match your search yet."
+                  : listingsTab === "for-you"
+                  ? "There are no listings assigned to your profile right now."
+                  : "No listings are available at the moment."}
+              </Typography>
+            </Box>
+          )}
+          {filteredDashboardListings.length > visibleDashboardListings.length ? (
+            <Box ref={listingsLoadMoreRef} className="dashboard-load-more-trigger">
+              <CircularProgress size={24} color="warning" />
+            </Box>
+          ) : null}
+        </Paper>
+      );
+    }
+
+    if (selectedMenu === "Agents") {
+      return (
+        <>
+          {visibleAgents.length ? (
+            <div className="agent-grid">
+              {visibleAgents.map((agent) => (
+                <Card key={agent.id} className="agent-card" elevation={2}>
+                  <CardMedia
+                    component="img"
+                    height="220"
+                    image={resolveAgentImage(agent.profile_picture, agent.id)}
+                    alt={
+                      agent.full_name ||
+                      `${agent.first_name || ""} ${agent.last_name || ""}`.trim() ||
+                      agent.email
+                    }
+                  />
+                  <CardContent sx={{ display: "grid", gap: 1.25 }}>
+                    {(() => {
+                      const agentListings = latestListings.filter(
+                        (listing) => listing.owner_id === agent.id,
+                      );
+                      const agentViews = agentListings.reduce(
+                        (sum, listing) => sum + listing.total_views,
+                        0,
+                      );
+
+                      return (
+                        <>
+                          <div className="agent-card-title-row">
+                            <div className="agent-card-title-copy">
+                              <Typography variant="h6">
+                                {agent.full_name ||
+                                  `${agent.first_name || ""} ${agent.last_name || ""}`.trim() ||
+                                  agent.email}
+                              </Typography>
+                              {agent.status === "approved" ||
+                              agent.status === "active" ? (
+                                <VerifiedIcon
+                                  className="agent-verified-icon"
+                                  fontSize="small"
+                                />
+                              ) : null}
+                            </div>
+                            <IconButton
+                              size="small"
+                              aria-label={`Open actions for ${agent.full_name || agent.email}`}
+                              onClick={(event) =>
+                                handleAgentActionOpen(event, agent)
+                              }
+                            >
+                              <MoreVertIcon fontSize="small" />
+                            </IconButton>
+                          </div>
+                          <Divider />
+                          <Typography variant="body2" color="text.secondary">
+                            Residence:{" "}
+                            {[agent.village, agent.district]
+                              .filter(Boolean)
+                              .join(", ") || "Not added"}
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            {agent.email}
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            {agent.phone_number || "No phone number"}
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            Experience: {agent.experience || "Not added"}
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            Sales closed: {agent.sales_closed ?? 0}
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            {formatMemberDuration(agent.created_at)}
+                          </Typography>
+                          <div className="agent-stats-row">
+                            <Chip
+                              size="small"
+                              label={`${agentListings.length} listings`}
+                            />
+                            <Chip
+                              size="small"
+                              icon={<VisibilityOutlinedIcon fontSize="small" />}
+                              label={`${agentViews} views`}
+                            />
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          ) : (
+            <Box className="dashboard-empty-state">
+              <Typography variant="h6">No agents here yet.</Typography>
+              <Typography color="text.secondary">
+                No agents match your current search.
+              </Typography>
+            </Box>
+          )}
+          {filteredAgents.length > visibleAgents.length ? (
+            <Box ref={agentsLoadMoreRef} className="dashboard-load-more-trigger">
+              <CircularProgress size={24} color="warning" />
+            </Box>
+          ) : null}
+        </>
+      );
+    }
+
+    if (selectedMenu === "Wishes") {
+      return (
+        <div className="listing-grid">
+          {wishes.map((wish) => (
+            <Paper key={wish.id} className="text-panel">
+              <Typography variant="h6" sx={{ mb: 1 }}>
+                {wish.title}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                {wish.description}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {wish.customer_name} | {wish.customer_email}
+              </Typography>
+            </Paper>
+          ))}
+        </div>
+      );
+    }
+
+    if (selectedMenu === "Site Visits") {
+      return (
+        <div className="listing-grid">
+          {siteVisits.map((visit) => (
+            <Paper key={visit.id} className="text-panel">
+              <Typography variant="h6" sx={{ mb: 1 }}>
+                Visit for Listing #{visit.listing_id}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {visit.customer_name} | {visit.customer_email}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {visit.scheduled_date} at {visit.scheduled_time}
+              </Typography>
+            </Paper>
+          ))}
+        </div>
+      );
+    }
+
+    if (selectedMenu === "Offers") {
+      return (
+        <div className="listing-grid">
+          {offers.map((offer) => (
+            <Paper key={offer.id} className="text-panel">
+              <Typography variant="h6" sx={{ mb: 1 }}>
+                {formatPrice(offer.amount)}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {offer.full_name} | {offer.email}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Status: {offer.status}
+              </Typography>
+            </Paper>
+          ))}
+        </div>
+      );
+    }
+
+    if (selectedMenu === "Reports") {
+      return (
+        <Paper className="priority-card">
+          <Typography variant="h5" sx={{ mb: 2 }}>
+            Priority actions
+          </Typography>
+          <div className="bullet-list">
+            <Chip
+              icon={<CheckCircleOutlineOutlinedIcon />}
+              label="Approve agents"
+            />
+            <Chip
+              icon={<CheckCircleOutlineOutlinedIcon />}
+              label="Review wishes and site visits"
+            />
+            <Chip
+              icon={<CheckCircleOutlineOutlinedIcon />}
+              label="Monitor offers and reports"
+            />
+          </div>
+        </Paper>
+      );
+    }
+
+    if (selectedMenu === "Audit logs") {
+      return (
+        <div className="listing-grid">
+          {auditLogs.map((log) => (
+            <Paper key={log.id} className="text-panel">
+              <Typography variant="h6" sx={{ mb: 1 }}>
+                {log.action}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {log.description}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {new Date(log.created_at).toLocaleString()}
+              </Typography>
+            </Paper>
+          ))}
+        </div>
+      );
+    }
+
+    if (selectedMenu === "Settings") {
+      return infoPanel(
+        "System settings",
+        "Manage account setup, approvals, and operational preferences from this shared admin workspace.",
+      );
+    }
+
+    return null;
+  }
+
   async function handleWishSubmit(event: FormEvent) {
     event.preventDefault();
-    await api.post("/wishes", wishForm);
-    setWishForm({
-      title: "",
-      description: "",
-      price_range: "",
-      purpose: "",
-      district: "",
-      village: "",
-      size_range: "",
-      customer_name: "",
-      customer_email: "",
-      customer_mobile_number: "",
-    });
-    closeWishDrawer();
+    try {
+      await api.post("/wishes", wishForm);
+      setWishForm({
+        title: "",
+        description: "",
+        price_range: "",
+        purpose: "",
+        district: "",
+        village: "",
+        size_range: "",
+        customer_name: "",
+        customer_email: "",
+        customer_mobile_number: "",
+      });
+      closeWishDrawer();
+      showFormAlert("success", "Wish saved successfully in the database.");
+    } catch (error) {
+      showFormAlert(
+        "error",
+        getApiErrorMessage(error, "Unable to save your wish right now."),
+      );
+    }
   }
 
   async function handleSiteVisitSubmit(event: FormEvent) {
     event.preventDefault();
     if (!selectedListing) return;
-    await api.post("/site-visits", {
-      listing_id: selectedListing.id,
-      customer_name: siteVisitForm.customer_name,
-      customer_email: siteVisitForm.customer_email,
-      customer_mobile_number: siteVisitForm.customer_mobile_number,
-      scheduled_date: siteVisitForm.scheduled_date?.format("YYYY-MM-DD"),
-      scheduled_time: siteVisitForm.scheduled_time?.format("HH:mm"),
-      message: siteVisitForm.message,
-    });
-    setSiteVisitForm({
-      customer_name: "",
-      customer_email: "",
-      customer_mobile_number: "",
-      scheduled_date: null,
-      scheduled_time: null,
-      message: "",
-    });
-    closeSiteVisitDrawer();
+    try {
+      await api.post("/site-visits", {
+        listing_id: selectedListing.id,
+        customer_name: siteVisitForm.customer_name,
+        customer_email: siteVisitForm.customer_email,
+        customer_mobile_number: siteVisitForm.customer_mobile_number,
+        scheduled_date: siteVisitForm.scheduled_date?.format("YYYY-MM-DD"),
+        scheduled_time: siteVisitForm.scheduled_time?.format("HH:mm"),
+        message: siteVisitForm.message,
+      });
+      setSiteVisitForm({
+        customer_name: "",
+        customer_email: "",
+        customer_mobile_number: "",
+        scheduled_date: null,
+        scheduled_time: null,
+        message: "",
+      });
+      closeSiteVisitDrawer();
+      showFormAlert(
+        "success",
+        "Site visit request saved successfully in the database.",
+      );
+    } catch (error) {
+      showFormAlert(
+        "error",
+        getApiErrorMessage(
+          error,
+          "Unable to save your site visit request right now.",
+        ),
+      );
+    }
   }
 
   async function handleOfferSubmit(event: FormEvent) {
     event.preventDefault();
     if (!selectedListing) return;
-    await api.post("/offers", {
-      listing_id: selectedListing.id,
-      amount: Number(offerForm.amount),
-      full_name: offerForm.full_name,
-      mobile_number: offerForm.mobile_number,
-      email: offerForm.email,
-      user_id: user?.id ?? null,
-    });
-    setOfferForm({
-      amount: "",
-      full_name: "",
-      mobile_number: "",
-      email: "",
-    });
-    closeOfferDrawer();
+    try {
+      await api.post("/offers", {
+        listing_id: selectedListing.id,
+        amount: Number(offerForm.amount),
+        full_name: offerForm.full_name,
+        mobile_number: offerForm.mobile_number,
+        email: offerForm.email,
+        user_id: user?.id ?? null,
+      });
+      setOfferForm({
+        amount: "",
+        full_name: "",
+        mobile_number: "",
+        email: "",
+      });
+      closeOfferDrawer();
+      showFormAlert("success", "Offer saved successfully in the database.");
+    } catch (error) {
+      showFormAlert(
+        "error",
+        getApiErrorMessage(error, "Unable to save your offer right now."),
+      );
+    }
   }
 
   const renderTopBar = () => (
@@ -1371,57 +2295,67 @@ function App() {
             alignItems: "center",
           }}
         >
-          <div className="brand-row">
-            {showDashboardToggle ? (
+          {showDashboardToggle && user ? (
+            <div className="brand-row">
               <IconButton
                 onClick={() => setSidebarOpen((open) => !open)}
                 sx={{ color: "#111111" }}
               >
                 <MenuIcon />
               </IconButton>
-            ) : null}
-            <img
-              className="appbar-title-image"
-              src={logo}
-              alt="Solvent Asset Management"
-            />
-          </div>
+              <img
+                className="appbar-title-image"
+                src={logo}
+                alt="Solvent Asset Management"
+              />
+            </div>
+          ) : (
+            <div className="brand-row">
+              <img
+                className="appbar-title-image"
+                src={logo}
+                alt="Solvent Asset Management"
+              />
+            </div>
+          )}
           <div className="nav-row nav-row-desktop">
-            <Button
-              component={Link}
-              to="/"
-              startIcon={<HomeIcon />}
-              sx={getAppbarNavButtonSx("/")}
-            >
-              Home
-            </Button>
-            <Button
-              onClick={(event) => setAboutAnchor(event.currentTarget)}
-              sx={getAppbarNavButtonSx("/about")}
-            >
-              About
-            </Button>
-            <Button
-              component={Link}
-              to="/contact"
-              sx={getAppbarNavButtonSx("/contact")}
-            >
-              Contact Us
-            </Button>
-            <Button
-              component={Link}
-              to="/blog"
-              sx={getAppbarNavButtonSx("/blog")}
-            >
-              Blog
-            </Button>
-            <Button
-              component={Link}
-              to="/bonus-info"
-              sx={getAppbarNavButtonSx("/bonus-info")}
-            >
-              Bonus Info
-            </Button>
+            <>
+              <Button
+                component={Link}
+                to="/"
+                startIcon={<HomeIcon />}
+                sx={getAppbarNavButtonSx("/")}
+              >
+                Home
+              </Button>
+              <Button
+                onClick={(event) => setAboutAnchor(event.currentTarget)}
+                sx={getAppbarNavButtonSx("/about")}
+              >
+                About
+              </Button>
+              <Button
+                component={Link}
+                to="/contact"
+                sx={getAppbarNavButtonSx("/contact")}
+              >
+                Contact Us
+              </Button>
+              <Button
+                component={Link}
+                to="/blog"
+                sx={getAppbarNavButtonSx("/blog")}
+              >
+                Blog
+              </Button>
+              <Button
+                component={Link}
+                to="/bonus-info"
+                sx={getAppbarNavButtonSx("/bonus-info")}
+              >
+                Bonus Info
+              </Button>
+            </>
             <IconButton
               onClick={(event) => setAccountAnchor(event.currentTarget)}
               sx={{
@@ -1507,30 +2441,54 @@ function App() {
       onClose={handleAccountMenuClose}
     >
       {user
-        ? [
-            <MenuItem
-              key="dashboard"
-              onClick={() => {
-                setSelectedMenu(
-                  user.role === "agent" ? "My Listings" : "Listings",
-                );
-                handleAccountMenuClose();
-              }}
-            >
-              <DashboardOutlinedIcon fontSize="small" sx={{ mr: 1 }} />
-              Dashboard
-            </MenuItem>,
-            <MenuItem
-              key="logout"
-              onClick={() => {
-                setUser(null);
-                handleAccountMenuClose();
-              }}
-            >
-              <LogoutOutlinedIcon fontSize="small" sx={{ mr: 1 }} />
-              Logout
-            </MenuItem>,
-          ]
+        ? isDashboardRoute
+          ? [
+              <MenuItem
+                key="profile"
+                onClick={() => {
+                  setSelectedMenu("Profile");
+                  handleAccountMenuClose();
+                }}
+              >
+                <PersonOutlineOutlinedIcon fontSize="small" sx={{ mr: 1 }} />
+                Profile
+              </MenuItem>,
+              <MenuItem
+                key="logout"
+                onClick={() => {
+                  logout();
+                  handleAccountMenuClose();
+                }}
+              >
+                <LogoutOutlinedIcon fontSize="small" sx={{ mr: 1 }} />
+                Logout
+              </MenuItem>,
+            ]
+          : [
+              <MenuItem
+                key="dashboard"
+                onClick={() => {
+                  setSelectedMenu(
+                    user.role === "agent" ? "My Listings" : "Listings",
+                  );
+                  navigate("/dashboard");
+                  handleAccountMenuClose();
+                }}
+              >
+                <DashboardOutlinedIcon fontSize="small" sx={{ mr: 1 }} />
+                Dashboard
+              </MenuItem>,
+              <MenuItem
+                key="logout"
+                onClick={() => {
+                  logout();
+                  handleAccountMenuClose();
+                }}
+              >
+                <LogoutOutlinedIcon fontSize="small" sx={{ mr: 1 }} />
+                Logout
+              </MenuItem>,
+            ]
         : [
             <MenuItem
               key="login"
@@ -1606,22 +2564,31 @@ function App() {
               agent support and confidential off-market alerts;
             </Typography>
             <div className="footer-bullet-list">
-              <Typography variant="body2">
+              <Typography
+                variant="body2"
+                sx={{ color: "inherit", opacity: "70%" }}
+              >
                 <span className="footer-bullet">&#10003;</span> Verified
                 listings - Transparent pricing and vetted agents
               </Typography>
-              <Typography variant="body2">
+              <Typography
+                variant="body2"
+                sx={{ color: "inherit", opacity: "70%" }}
+              >
                 <span className="footer-bullet">&#10003;</span> Private alerts -
                 Early access to off-market opportunities
               </Typography>
-              <Typography variant="body2">
+              <Typography
+                variant="body2"
+                sx={{ color: "inherit", opacity: "70%" }}
+              >
                 <span className="footer-bullet">&#10003;</span> Land services -
                 Surveying, title checks and stewardship
               </Typography>
             </div>
             <Button
               variant="contained"
-              color="warning.main"
+              color="warning"
               size="small"
               sx={{ mt: 2, width: "fit-content" }}
               onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
@@ -1679,7 +2646,7 @@ function App() {
             >
               <EmailOutlinedIcon
                 fontSize="small"
-                sx={{ color: "warning.main" }}
+                sx={{ color: "warning.light" }}
               />
               solventug@gmail.com
             </Typography>
@@ -1690,7 +2657,7 @@ function App() {
             >
               <PhoneOutlinedIcon
                 fontSize="small"
-                sx={{ color: "warning.main" }}
+                sx={{ color: "warning.light" }}
               />
               (+256) 763615316
             </Typography>
@@ -1701,7 +2668,7 @@ function App() {
             >
               <PhoneOutlinedIcon
                 fontSize="small"
-                sx={{ color: "warning.main" }}
+                sx={{ color: "warning.light" }}
               />
               (+256) 752440513
             </Typography>
@@ -1712,7 +2679,7 @@ function App() {
             >
               <PlaceOutlinedIcon
                 fontSize="small"
-                sx={{ color: "warning.main" }}
+                sx={{ color: "warning.light" }}
               />
               Namanve Industrial Park - Kiwanga, Off Jomayi stones
             </Typography>
@@ -1723,40 +2690,74 @@ function App() {
             >
               <AccessTimeOutlinedIcon
                 fontSize="small"
-                sx={{ color: "warning.main" }}
+                sx={{ color: "warning.light" }}
               />
               9:00 - 18:00 (Mon - Fri)
             </Typography>
-            <Typography variant="body1" sx={{ opacity: "70%" }}>
-              Follow our social media channels.
-            </Typography>
+            <Typography variant="body1" sx={{ opacity: "70%" }}></Typography>
             <div className="footer-social-row">
-              <ButtonGroup size="medium" aria-label="Social media links">
+              <Stack
+                direction="row"
+                spacing={1}
+                aria-label="Social media links"
+              >
                 <IconButton
                   className="footer-social-button "
-                  sx={{ color: "inherit" }}
+                  sx={{
+                    color: "inherit",
+                    border: "1px solid rgba(255,255,255,0.7)",
+
+                    "&:hover": {
+                      color: "white",
+                      backgroundColor: "warning.main",
+                    },
+                  }}
                 >
                   <FacebookOutlinedIcon fontSize="small" />
                 </IconButton>
                 <IconButton
                   className="footer-social-button"
-                  sx={{ color: "inherit" }}
+                  sx={{
+                    color: "inherit",
+                    border: "1px solid rgba(255,255,255,0.7)",
+
+                    "&:hover": {
+                      color: "white",
+                      backgroundColor: "warning.main",
+                    },
+                  }}
                 >
                   <XIcon fontSize="small" />
                 </IconButton>
                 <IconButton
                   className="footer-social-button"
-                  sx={{ color: "inherit" }}
+                  sx={{
+                    color: "inherit",
+                    border: "1px solid rgba(255,255,255,0.7)",
+
+                    "&:hover": {
+                      color: "white",
+                      backgroundColor: "warning.main",
+                    },
+                  }}
                 >
                   <MusicNoteOutlinedIcon fontSize="small" />
                 </IconButton>
                 <IconButton
                   className="footer-social-button"
-                  sx={{ color: "inherit" }}
+                  sx={{
+                    color: "inherit",
+                    border: "1px solid rgba(255,255,255,0.7)",
+
+                    "&:hover": {
+                      color: "white",
+                      backgroundColor: "warning.main",
+                    },
+                  }}
                 >
                   <LinkedInIcon fontSize="small" />
                 </IconButton>
-              </ButtonGroup>
+              </Stack>
             </div>
           </Paper>
         </div>
@@ -1773,13 +2774,16 @@ function App() {
     </footer>
   );
 
-  if (user) {
-    const menuItems =
-      user.role === "super_admin"
-        ? superAdminMenu
-        : user.role === "admin"
-          ? adminMenu
-          : ["My Listings", "Analytics", "Profile"];
+  if (isDashboardRoute && !authReady) {
+    return (
+      <Box className="sam-shell">
+        <PageLoader />
+      </Box>
+    );
+  }
+
+  if (user && isDashboardRoute) {
+    const menuItems = getDashboardMenuItems(user);
 
     return (
       <Box className="sam-shell">
@@ -1818,107 +2822,95 @@ function App() {
             ) : (
               <>
                 <div className="dashboard-top">
-                  <div>
+                  <div className="dashboard-top-inner">
                     <Typography variant="h4" sx={{ mb: 1 }}>
-                      {user.role === "agent"
-                        ? "Agent dashboard"
-                        : "Operations dashboard"}
+                      {selectedMenu}
                     </Typography>
-                    <Typography color="text.secondary">
-                      {user.role === "agent"
-                        ? "Agents only see and interact with the listings they post."
-                        : "Super Admin and Admin dashboards use a mini variant drawer and operational summaries."}
-                    </Typography>
-                  </div>
-                </div>
-
-                <div className="stats-grid">
-                  <Paper className="stat-card">
-                    <Typography variant="h4" color="primary.main">
-                      {stats?.total_listings ?? 0}
-                    </Typography>
-                    <Typography color="text.secondary">
-                      Total Listings
-                    </Typography>
-                  </Paper>
-                  <Paper className="stat-card">
-                    <Typography variant="h4" color="primary.main">
-                      {stats?.approved_listings ?? 0}
-                    </Typography>
-                    <Typography color="text.secondary">
-                      Approved Listings
-                    </Typography>
-                  </Paper>
-                  <Paper className="stat-card">
-                    <Typography variant="h4" color="primary.main">
-                      {stats?.total_views ?? 0}
-                    </Typography>
-                    <Typography color="text.secondary">Total Views</Typography>
-                  </Paper>
-                  <Paper className="stat-card">
-                    <Typography variant="h4" color="primary.main">
-                      {user.role === "agent"
-                        ? (stats?.total_sales ?? 0)
-                        : (stats?.total_offers ?? 0)}
-                    </Typography>
-                    <Typography color="text.secondary">
-                      {user.role === "agent" ? "Total Sales" : "Offers"}
-                    </Typography>
-                  </Paper>
-                </div>
-
-                {user.role === "admin" || user.role === "super_admin" ? (
-                  <div className="dashboard-content">
-                    <Paper className="priority-card">
-                      <Typography variant="h5" sx={{ mb: 2 }}>
-                        Priority actions
-                      </Typography>
-                      <div className="bullet-list">
-                        <Chip
-                          icon={<CheckCircleOutlineOutlinedIcon />}
-                          label="Approve agents"
-                        />
-                        <Chip
-                          icon={<CheckCircleOutlineOutlinedIcon />}
-                          label="Review wishes and site visits"
-                        />
-                        <Chip
-                          icon={<CheckCircleOutlineOutlinedIcon />}
-                          label="Monitor offers and reports"
-                        />
-                      </div>
-                    </Paper>
-                    {listingsLoading ? (
-                      <ListingCardLoader count={3} className="listing-grid" />
-                    ) : (
-                      <div className="listing-grid">
-                        {latestListings.slice(0, 3).map((listing) => (
-                          <ListingCard
-                            key={listing.id}
-                            listing={listing}
-                            onOpenSiteVisit={openSiteVisitDrawer}
-                            onOpenOffer={openOfferDrawer}
-                            onRegisterView={registerListingView}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ) : listingsLoading ? (
-                  <ListingCardLoader count={3} className="listing-grid" />
-                ) : (
-                  <div className="listing-grid">
-                    {latestListings.map((listing) => (
-                      <ListingCard
-                        key={listing.id}
-                        listing={listing}
-                        onOpenSiteVisit={openSiteVisitDrawer}
-                        onOpenOffer={openOfferDrawer}
-                        onRegisterView={registerListingView}
+                    {selectedMenu === "Listings" ? (
+                      <TextField
+                        size="small"
+                        label="Search listings"
+                        value={listingSearch}
+                        onChange={(event) => setListingSearch(event.target.value)}
+                        placeholder="Title, author, size, district"
+                        slotProps={{
+                          input: {
+                            startAdornment: (
+                              <InputAdornment position="start">
+                                <SearchIcon fontSize="small" />
+                              </InputAdornment>
+                            ),
+                          },
+                        }}
+                        sx={{ minWidth: { xs: "100%", sm: 320 } }}
                       />
-                    ))}
+                    ) : null}
+                    {selectedMenu === "Agents" ? (
+                      <TextField
+                        size="small"
+                        label="Search agents"
+                        value={agentSearch}
+                        onChange={(event) => setAgentSearch(event.target.value)}
+                        slotProps={{
+                          input: {
+                            startAdornment: (
+                              <InputAdornment position="start">
+                                <SearchIcon fontSize="small" />
+                              </InputAdornment>
+                            ),
+                          },
+                        }}
+                        sx={{ minWidth: { xs: "100%", sm: 280 } }}
+                      />
+                    ) : null}
                   </div>
-                )}
+                  <div className="dashboard-top-divider">
+                    <Divider />
+                  </div>
+                </div>
+
+                {selectedMenu !== "Agents" && selectedMenu !== "Listings" ? (
+                  <div className="stats-grid">
+                    <Paper className="stat-card">
+                      <Typography variant="h4" color="primary.main">
+                        {stats?.total_listings ?? 0}
+                      </Typography>
+                      <Typography color="text.secondary">
+                        Total Listings
+                      </Typography>
+                    </Paper>
+                    <Paper className="stat-card">
+                      <Typography variant="h4" color="primary.main">
+                        {stats?.approved_listings ?? 0}
+                      </Typography>
+                      <Typography color="text.secondary">
+                        Approved Listings
+                      </Typography>
+                    </Paper>
+                    <Paper className="stat-card">
+                      <Typography variant="h4" color="primary.main">
+                        {stats?.total_views ?? 0}
+                      </Typography>
+                      <Typography color="text.secondary">
+                        Total Views
+                      </Typography>
+                    </Paper>
+                    <Paper className="stat-card">
+                      <Typography variant="h4" color="primary.main">
+                        {user.role === "agent"
+                          ? (stats?.total_sales ?? 0)
+                          : (stats?.total_offers ?? 0)}
+                      </Typography>
+                      <Typography color="text.secondary">
+                        {user.role === "agent" ? "Total Sales" : "Offers"}
+                      </Typography>
+                    </Paper>
+                  </div>
+                ) : null}
+
+                <div className="dashboard-content">
+                  {renderDashboardPanel()}
+                </div>
               </>
             )}
           </main>
@@ -2100,6 +3092,79 @@ function App() {
             </Box>
           </Box>
         </Drawer>
+        <Menu
+          anchorEl={agentActionAnchor}
+          open={Boolean(agentActionAnchor)}
+          onClose={handleAgentActionClose}
+          slotProps={{ paper: { sx: { width: 270 } } }}
+        >
+        <MenuItem onClick={() => void handleAgentAction("approve")}>
+          <CheckCircleOutlineOutlinedIcon fontSize="small" sx={{ mr: 1 }} />
+          Approve
+        </MenuItem>
+        <MenuItem onClick={() => void handleAgentAction("reject")}>
+          <CancelIcon fontSize="small" sx={{ mr: 1 }} />
+          Reject
+        </MenuItem>
+        <MenuItem onClick={() => void handleAgentAction("deactivate")}>
+          <BlockIcon fontSize="small" sx={{ mr: 1 }} />
+          Deactivate
+        </MenuItem>
+        <MenuItem onClick={() => void handleAgentAction("delete")}>
+          <DeleteIcon fontSize="small" sx={{ mr: 1 }} />
+          Delete
+        </MenuItem>
+        </Menu>
+        <Menu
+          anchorEl={listingActionAnchor}
+          open={Boolean(listingActionAnchor)}
+          onClose={handleListingActionClose}
+          slotProps={{ paper: { sx: { width: 270 } } }}
+        >
+          <MenuItem onClick={handleListingActionClose}>
+            <EditIcon fontSize="small" sx={{ mr: 1 }} />
+            Edit
+          </MenuItem>
+          <MenuItem onClick={handleListingActionClose}>
+            <CheckCircleOutlineOutlinedIcon fontSize="small" sx={{ mr: 1 }} />
+            Approve
+          </MenuItem>
+          <MenuItem onClick={handleListingActionClose}>
+            <StarIcon fontSize="small" sx={{ mr: 1 }} />
+            Featured
+          </MenuItem>
+          <MenuItem onClick={handleListingActionClose}>
+            <CancelIcon fontSize="small" sx={{ mr: 1 }} />
+            Reject
+          </MenuItem>
+          <MenuItem onClick={handleListingActionClose}>
+            <BlockIcon fontSize="small" sx={{ mr: 1 }} />
+            Deactivate
+          </MenuItem>
+          <MenuItem onClick={handleListingActionClose}>
+            <SellIcon fontSize="small" sx={{ mr: 1 }} />
+            Sold Off
+          </MenuItem>
+          <MenuItem onClick={handleListingActionClose}>
+            <DeleteIcon fontSize="small" sx={{ mr: 1 }} />
+            Delete
+          </MenuItem>
+        </Menu>
+        <Snackbar
+          open={formAlert.open}
+          autoHideDuration={5000}
+          onClose={closeFormAlert}
+          anchorOrigin={{ vertical: "top", horizontal: "right" }}
+        >
+          <Alert
+            onClose={closeFormAlert}
+            severity={formAlert.severity}
+            variant="filled"
+            sx={{ width: "100%" }}
+          >
+            {formAlert.message}
+          </Alert>
+        </Snackbar>
         {renderFooter()}
       </Box>
     );
@@ -2124,11 +3189,11 @@ function App() {
                 latestListings={latestListings}
                 heroSlides={heroSlides}
                 listingsLoading={listingsLoading}
+                homeListingsTab={homeListingsTab}
                 filters={filters}
-                listingLimit={listingLimit}
                 slideIndex={slideIndex}
                 setFilters={setFilters}
-                setListingLimit={setListingLimit}
+                setHomeListingsTab={setHomeListingsTab}
                 setSlideIndex={setSlideIndex}
                 handleFilterSubmit={handleFilterSubmit}
                 showPreviousSlide={showPreviousSlide}
@@ -2155,11 +3220,11 @@ function App() {
                 latestListings={latestListings}
                 heroSlides={heroSlides}
                 listingsLoading={listingsLoading}
+                homeListingsTab={homeListingsTab}
                 filters={filters}
-                listingLimit={listingLimit}
                 slideIndex={slideIndex}
                 setFilters={setFilters}
-                setListingLimit={setListingLimit}
+                setHomeListingsTab={setHomeListingsTab}
                 setSlideIndex={setSlideIndex}
                 handleFilterSubmit={handleFilterSubmit}
                 showPreviousSlide={showPreviousSlide}
@@ -2611,7 +3676,140 @@ function App() {
           ) : null}
         </Box>
       </Drawer>
+      <Snackbar
+        open={formAlert.open}
+        autoHideDuration={5000}
+        onClose={closeFormAlert}
+        anchorOrigin={{ vertical: "top", horizontal: "right" }}
+      >
+        <Alert
+          onClose={closeFormAlert}
+          severity={formAlert.severity}
+          variant="filled"
+          sx={{ width: "100%" }}
+        >
+          {formAlert.message}
+        </Alert>
+      </Snackbar>
     </Box>
+  );
+}
+
+function DashboardListingCard({
+  listing,
+  authorName,
+  authorApproved,
+  offerCount,
+  siteVisitCount,
+  onRegisterView,
+  onOpenActions,
+}: {
+  listing: Listing;
+  authorName: string;
+  authorApproved: boolean;
+  offerCount: number;
+  siteVisitCount: number;
+  onRegisterView: (listingId: number) => void;
+  onOpenActions: (event: MouseEvent<HTMLElement>, listing: Listing) => void;
+}) {
+  return (
+    <Card
+      className="dashboard-listing-card"
+      elevation={2}
+      onClickCapture={() => onRegisterView(listing.id)}
+      sx={{
+        border: "1px solid rgba(17,17,17,0.08)",
+        height: "100%",
+        position: "relative",
+        overflow: "hidden",
+      }}
+    >
+      {listing.status.toLowerCase() === "sold" ? (
+        <div className="listing-sold-ribbon">Sold</div>
+      ) : null}
+      <CardMedia
+        component="img"
+        height="220"
+        image={resolveImage(listing.thumbnail_url)}
+        alt={listing.title}
+      />
+      <CardContent sx={{ display: "grid", gap: 1.5 }}>
+        <div className="listing-top-row">
+          <Chip
+            label={listing.purpose ?? listing.category}
+            color="primary"
+            size="small"
+          />
+          <Chip
+            label={formatPrice(listing.price)}
+            variant="outlined"
+            color="secondary"
+            size="small"
+          />
+          <Chip
+            label={`${listing.total_views} views`}
+            size="small"
+            className="listing-views-button"
+            icon={<VisibilityOutlinedIcon fontSize="small" />}
+          />
+        </div>
+        <Typography variant="h5">{listing.title}</Typography>
+        <div className="dashboard-listing-author-row">
+          <div className="dashboard-listing-author">
+            <PersonOutlineOutlinedIcon fontSize="small" color="action" />
+            <Typography variant="body2" color="text.secondary">
+              {authorName || "Unknown author"}
+            </Typography>
+            {authorApproved ? (
+              <VerifiedIcon className="agent-verified-icon" fontSize="small" />
+            ) : null}
+          </div>
+          <IconButton
+            size="small"
+            aria-label={`Open actions for ${listing.title}`}
+            onClick={(event) => onOpenActions(event, listing)}
+          >
+            <MoreVertIcon fontSize="small" />
+          </IconButton>
+        </div>
+        <Divider />
+        <Typography variant="body2" color="text.secondary">
+          {listing.description}
+        </Typography>
+        <div className="listing-meta-row">
+          <Typography
+            variant="body2"
+            className="listing-meta-item"
+            color="text.secondary"
+          >
+            <PlaceOutlinedIcon fontSize="inherit" />
+            {listing.district}
+            {listing.city ? `, ${listing.city}` : ""}
+            {listing.size_text ? ` | ${listing.size_text}` : ""}
+          </Typography>
+          <Typography
+            variant="body2"
+            className="listing-meta-item"
+            color="text.secondary"
+          >
+            <AccessTimeOutlinedIcon fontSize="inherit" />
+            {formatTimeSincePosted(listing.created_at)}
+          </Typography>
+        </div>
+        <div className="dashboard-listing-stats-row">
+          <Chip
+            label={`${offerCount} Offers`}
+            size="small"
+            color="warning"
+          />
+          <Chip
+            label={`${siteVisitCount} Site Visits`}
+            size="small"
+            variant="outlined"
+          />
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
