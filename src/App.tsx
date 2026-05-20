@@ -5271,13 +5271,15 @@ function App() {
                 </div>
                 <LocalOfferIcon />
                 <span className="dashboard-record-thumbnail-amount">
-                  {offerListing ? formatPrice(offerListing.price) : "Listing price unavailable"}
+                  {formatPrice(offer.amount)}
                 </span>
               </div>
               <CardContent className="dashboard-record-content">
                 <div className="dashboard-record-title-row">
                   <Typography variant="h6">
-                    {formatPrice(offer.amount)}
+                    {offerListing
+                      ? formatPrice(offerListing.price)
+                      : "Listing price unavailable"}
                   </Typography>
                   <IconButton
                     size="small"
