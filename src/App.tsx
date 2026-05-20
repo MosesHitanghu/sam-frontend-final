@@ -12,7 +12,7 @@ import type {
   ReactElement,
   ReactNode,
 } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Dayjs } from "dayjs";
 import {
   Alert,
@@ -34,6 +34,7 @@ import {
   DialogTitle,
   Drawer,
   FormControlLabel,
+  Grid,
   IconButton,
   Menu,
   MenuItem,
@@ -47,8 +48,10 @@ import {
   Tabs,
   TextField,
   Toolbar,
+  Tooltip,
   Typography,
   Stack,
+  useMediaQuery,
 } from "@mui/material";
 import { isAxiosError } from "axios";
 import { DatePicker, TimePicker } from "@mui/x-date-pickers";
@@ -99,6 +102,7 @@ import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import SearchIcon from "@mui/icons-material/Search";
+import FilterListIcon from "@mui/icons-material/FilterList";
 import EmailOutlinedIcon from "@mui/icons-material/EmailOutlined";
 import FacebookOutlinedIcon from "@mui/icons-material/FacebookOutlined";
 import LinkedInIcon from "@mui/icons-material/LinkedIn";
@@ -107,6 +111,8 @@ import MusicNoteOutlinedIcon from "@mui/icons-material/MusicNoteOutlined";
 import SpeakerNotesIcon from "@mui/icons-material/SpeakerNotes";
 import VerifiedIcon from "@mui/icons-material/Verified";
 import PhotoLibraryIcon from "@mui/icons-material/PhotoLibrary";
+import PublishedWithChangesIcon from "@mui/icons-material/PublishedWithChanges";
+import ForwardToInboxIcon from "@mui/icons-material/ForwardToInbox";
 import {
   Link,
   Route,
@@ -210,6 +216,32 @@ type HeroSlide = {
   image_url: string;
 };
 
+type AdminDistrictSummary = {
+  id: number;
+  source_id: string;
+  name: string;
+  type: string;
+};
+
+type AdminParishArea = {
+  id: number;
+  source_id: string;
+  name: string;
+  type: string;
+};
+
+type AdminSubcountyArea = AdminParishArea & {
+  parishes: AdminParishArea[];
+};
+
+type AdminCountyArea = AdminParishArea & {
+  subcounties: AdminSubcountyArea[];
+};
+
+type AdminDistrictAreas = AdminDistrictSummary & {
+  counties: AdminCountyArea[];
+};
+
 type ListingViewResponse = {
   listing_id: number;
   total_views: number;
@@ -288,13 +320,25 @@ type SelectedOperationalRecord =
   | { kind: "siteVisit"; record: SiteVisit }
   | { kind: "offer"; record: Offer };
 
+type ListingRecordsDialogState = {
+  kind: "offers" | "siteVisits";
+  listing: Listing;
+};
+
 type FormAlertState = {
   open: boolean;
   severity: AlertSeverity;
   message: string;
 };
 
+type AuthSession = {
+  user: User;
+  lastActivityAt: number;
+};
+
 const AUTH_STORAGE_KEY = "sam_auth_user";
+const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
+const SESSION_CHECK_INTERVAL_MS = 60 * 1000;
 const DASHBOARD_MENU_STORAGE_KEY = "sam_dashboard_menu";
 const HOME_LISTINGS_BATCH_SIZE = 3;
 const LISTINGS_BATCH_SIZE = 6;
@@ -336,6 +380,24 @@ const fallbackHero: HeroSlide[] = [
   },
 ];
 
+function uniqueSortedOptions(values: string[]) {
+  return Array.from(
+    new Set(values.map((value) => value.trim()).filter(Boolean)),
+  ).sort((first, second) => first.localeCompare(second));
+}
+
+function flattenDistrictAreas(district: AdminDistrictAreas) {
+  return uniqueSortedOptions(
+    district.counties.flatMap((county) => [
+      county.name,
+      ...county.subcounties.flatMap((subcounty) => [
+        subcounty.name,
+        ...subcounty.parishes.map((parish) => parish.name),
+      ]),
+    ]),
+  );
+}
+
 const fallbackBonus: BonusSection[] = [
   {
     heading: "Why use SAM.UG?",
@@ -357,6 +419,47 @@ const adminMenu = [
   "Reports",
 ];
 const superAdminMenu = [...adminMenu, "Audit logs", "Users"];
+
+function getListingArticleBackTo(
+  pathname: string,
+  state: ListingArticleLocationState | null,
+) {
+  if (pathname.startsWith("/listings/")) {
+    return state?.backTo ?? "/";
+  }
+  return pathname === "/dashboard" ? "/dashboard" : "/";
+}
+
+function isStoredAuthSession(value: unknown): value is AuthSession {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "user" in value &&
+    typeof (value as AuthSession).lastActivityAt === "number"
+  );
+}
+
+function readStoredAuthSession(): AuthSession | null {
+  const storedAuth = window.localStorage.getItem(AUTH_STORAGE_KEY);
+  if (!storedAuth) return null;
+
+  const parsed = JSON.parse(storedAuth) as User | AuthSession;
+  if (isStoredAuthSession(parsed)) {
+    return parsed;
+  }
+
+  return {
+    user: parsed,
+    lastActivityAt: Date.now(),
+  };
+}
+
+function writeAuthSession(user: User, lastActivityAt = Date.now()) {
+  window.localStorage.setItem(
+    AUTH_STORAGE_KEY,
+    JSON.stringify({ user, lastActivityAt }),
+  );
+}
 const dashboardMenuIcons: Record<string, ReactNode> = {
   Listings: <HomeWorkIcon fontSize="small" />,
   Agents: <Groups2Icon fontSize="small" />,
@@ -392,6 +495,23 @@ function formatPrice(value: number) {
   return `UGX ${new Intl.NumberFormat("en-UG", {
     maximumFractionDigits: 0,
   }).format(value)}`;
+}
+
+function formatAmountText(value?: string | null) {
+  const text = value?.trim();
+  if (!text) return "Any budget";
+  const includesCurrency = /\bUGX\b/i.test(text);
+
+  const formattedText = text.replace(/\d[\d,]*(?:\.\d+)?/g, (amount) => {
+    const numericValue = Number(amount.replace(/,/g, ""));
+    if (!Number.isFinite(numericValue)) return amount;
+
+    return new Intl.NumberFormat("en-UG", {
+      maximumFractionDigits: amount.includes(".") ? 2 : 0,
+    }).format(numericValue);
+  });
+
+  return includesCurrency ? formattedText : `UGX ${formattedText}`;
 }
 
 function formatTimeSincePosted(value: string) {
@@ -463,14 +583,20 @@ function ListingCard({
   onOpenSiteVisit,
   onOpenOffer,
   onRegisterView,
-  onOpenArticle,
 }: {
   listing: Listing;
   onOpenSiteVisit: (listing: Listing) => void;
   onOpenOffer: (listing: Listing) => void;
   onRegisterView: (listingId: number) => void;
-  onOpenArticle: (listing: Listing) => void;
 }) {
+  const location = useLocation();
+  const articleState = {
+    backTo: getListingArticleBackTo(
+      location.pathname,
+      location.state as ListingArticleLocationState | null,
+    ),
+  };
+
   return (
     <Card
       className="listing-card"
@@ -486,29 +612,31 @@ function ListingCard({
       {listing.status.toLowerCase() === "sold" ? (
         <div className="listing-sold-ribbon">Sold</div>
       ) : null}
-      <CardMedia
-        component="img"
-        height="220"
-        image={resolveImage(listing.thumbnail_url)}
-        alt={listing.title}
-      />
+      <div className="listing-thumbnail">
+        <CardMedia
+          component="img"
+          height="220"
+          image={resolveImage(listing.thumbnail_url)}
+          alt={listing.title}
+        />
+        <Chip
+          label={formatPrice(listing.price)}
+          size="small"
+          className="listing-thumbnail-price"
+        />
+      </div>
       <CardContent sx={{ display: "grid", gap: 1.5 }}>
         <div className="listing-top-row">
           <Chip
             label={listing.purpose ?? listing.category}
-            color="primary"
             size="small"
-          />
-          <Chip
-            label={formatPrice(listing.price)}
-            variant="outlined"
-            color="secondary"
-            size="small"
-            className="listing-amount-chip"
+            className="listing-purpose-chip"
           />
           <Chip
             label={`${listing.total_views} views`}
             size="small"
+            color="primary"
+            variant="outlined"
             className="listing-views-button"
             icon={<VisibilityOutlinedIcon fontSize="small" />}
           />
@@ -555,9 +683,11 @@ function ListingCard({
               Site Visit
             </Button>
             <Button
+              component={Link}
+              to={`/listings/${listing.id}`}
+              state={articleState}
               variant="outlined"
               size="small"
-              onClick={() => onOpenArticle(listing)}
             >
               Read More
             </Button>
@@ -613,6 +743,7 @@ type HomePageProps = {
     minPrice: string;
     maxPrice: string;
   };
+  districtOptions: string[];
   slideIndex: number;
   setFilters: React.Dispatch<
     React.SetStateAction<{
@@ -629,7 +760,6 @@ type HomePageProps = {
   onOpenWish: () => void;
   onOpenSiteVisit: (listing: Listing) => void;
   onOpenOffer: (listing: Listing) => void;
-  onOpenArticle: (listing: Listing) => void;
   onRegisterView: (listingId: number) => void;
 };
 
@@ -640,6 +770,7 @@ function HomePage({
   listingsLoading,
   homeListingsTab,
   filters,
+  districtOptions,
   slideIndex,
   setFilters,
   setHomeListingsTab,
@@ -650,10 +781,12 @@ function HomePage({
   onOpenWish,
   onOpenSiteVisit,
   onOpenOffer,
-  onOpenArticle,
   onRegisterView,
 }: HomePageProps) {
+  const homeFiltersSectionRef = useRef<HTMLDivElement | null>(null);
   const homeListingsSectionRef = useRef<HTMLDivElement | null>(null);
+  const homeListingsLoadMoreRef = useRef<HTMLDivElement | null>(null);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const activeSlide = heroSlides[slideIndex] ?? fallbackHero[0];
   const [visibleHomeListingsCount, setVisibleHomeListingsCount] = useState(
     HOME_LISTINGS_BATCH_SIZE,
@@ -675,9 +808,94 @@ function HomePage({
     0,
     visibleHomeListingsCount,
   );
+  const renderFilterFields = (showSubmit = true) => (
+    <>
+      <Box className="filter-intro">
+        <Typography className="filter-intro-title">
+          Find your property
+        </Typography>
+        <Typography className="filter-intro-copy">
+          Search by district or price
+        </Typography>
+      </Box>
+      <Autocomplete
+        openOnFocus
+        autoHighlight
+        disablePortal
+        forcePopupIcon={false}
+        size="small"
+        options={districtOptions}
+        value={filters.district || null}
+        noOptionsText="No districts loaded"
+        onChange={(_event, value) =>
+          setFilters({ ...filters, district: value ?? "" })
+        }
+        slotProps={{
+          popper: {
+            placement: "bottom-start",
+            modifiers: [
+              {
+                name: "flip",
+                enabled: false,
+              },
+              {
+                name: "offset",
+                options: {
+                  offset: [0, 8],
+                },
+              },
+            ],
+          },
+        }}
+        renderInput={(params) => (
+          <TextField
+            {...params}
+            size="small"
+            label="District"
+          />
+        )}
+        sx={{ minWidth: 0, width: "100%" }}
+      />
+      <TextField
+        size="small"
+        label="Min price"
+        value={filters.minPrice}
+        onChange={(event) =>
+          setFilters({ ...filters, minPrice: event.target.value })
+        }
+        slotProps={{
+          input: {
+            startAdornment: (
+              <InputAdornment position="start">UGX</InputAdornment>
+            ),
+          },
+        }}
+      />
+      <TextField
+        size="small"
+        label="Max price"
+        value={filters.maxPrice}
+        onChange={(event) =>
+          setFilters({ ...filters, maxPrice: event.target.value })
+        }
+        slotProps={{
+          input: {
+            startAdornment: (
+              <InputAdornment position="start">UGX</InputAdornment>
+            ),
+          },
+        }}
+      />
+      {showSubmit ? (
+        <Button type="submit" variant="contained" size="large">
+          Search
+        </Button>
+      ) : null}
+    </>
+  );
 
   useEffect(() => {
-    const target = homeListingsSectionRef.current;
+    const target = homeListingsLoadMoreRef.current;
     if (
       !target ||
       listingsLoading ||
@@ -686,33 +904,30 @@ function HomePage({
       return;
     }
 
-    const maybeLoadMore = () => {
-      const rect = target.getBoundingClientRect();
-      if (rect.bottom - window.innerHeight > 220) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries[0]?.isIntersecting) return;
 
-      setVisibleHomeListingsCount((current) => {
-        if (current >= homeSourceListings.length) {
-          return current;
-        }
-        return Math.min(
-          current + HOME_LISTINGS_BATCH_SIZE,
-          homeSourceListings.length,
-        );
-      });
-    };
+        setVisibleHomeListingsCount((current) => {
+          if (current >= homeSourceListings.length) {
+            return current;
+          }
+          return Math.min(
+            current + HOME_LISTINGS_BATCH_SIZE,
+            homeSourceListings.length,
+          );
+        });
+      },
+      { rootMargin: "220px" },
+    );
 
-    maybeLoadMore();
-    window.addEventListener("scroll", maybeLoadMore, { passive: true });
-    window.addEventListener("resize", maybeLoadMore);
-    return () => {
-      window.removeEventListener("scroll", maybeLoadMore);
-      window.removeEventListener("resize", maybeLoadMore);
-    };
+    observer.observe(target);
+    return () => observer.disconnect();
   }, [homeSourceListings.length, listingsLoading, visibleHomeListingsCount]);
 
   return (
     <>
-      <Container maxWidth="xl" sx={{ py: 4 }}>
+      <Container maxWidth="xl" sx={{ pt: 2, pb: 4 }}>
         <Paper
           key={activeSlide.id}
           className="hero-slide hero-slide-fade"
@@ -732,7 +947,7 @@ function HomePage({
             />
             <Typography
               variant="h1"
-              sx={{ color: "#fff", fontSize: { xs: 44, md: 78 } }}
+              sx={{ color: "#fff", fontSize: { xs: 38, md: 60 } }}
             >
               Exceptional properties with transparent land support.
             </Typography>
@@ -748,6 +963,16 @@ function HomePage({
                 variant="outlined"
                 size="large"
                 sx={{ color: "#fff", borderColor: "rgba(255,255,255,0.65)" }}
+                onClick={() => {
+                  const filtersSection = homeFiltersSectionRef.current;
+                  if (!filtersSection) return;
+
+                  const top =
+                    filtersSection.getBoundingClientRect().top +
+                    window.scrollY -
+                    96;
+                  window.scrollTo({ top, behavior: "smooth" });
+                }}
               >
                 Explore Listings
               </Button>
@@ -812,89 +1037,55 @@ function HomePage({
         </Paper>
       </Container>
 
-      <Container maxWidth="xl">
+      <Container maxWidth="xl" ref={homeFiltersSectionRef}>
         <Paper
           component="form"
-          onSubmit={handleFilterSubmit}
-          className="filter-card"
+          onSubmit={(event) => {
+            handleFilterSubmit(event);
+            setMobileFiltersOpen(false);
+          }}
+          className="filter-card filter-card-desktop"
         >
-          <Box className="filter-intro">
-            <Typography className="filter-intro-title">
-              Find your property
-            </Typography>
-            <Typography className="filter-intro-copy">
-              Search by district or price
-            </Typography>
-          </Box>
-          <TextField
-            size="small"
-            label="District"
-            value={filters.district}
-            onChange={(event) =>
-              setFilters({ ...filters, district: event.target.value })
-            }
-            slotProps={{
-              input: {
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <PlaceOutlinedIcon fontSize="small" />
-                  </InputAdornment>
-                ),
-              },
-            }}
-          />
-          <TextField
-            size="small"
-            label="Min price"
-            value={filters.minPrice}
-            onChange={(event) =>
-              setFilters({ ...filters, minPrice: event.target.value })
-            }
-            slotProps={{
-              input: {
-                startAdornment: (
-                  <InputAdornment position="start">UGX</InputAdornment>
-                ),
-              },
-            }}
-          />
-          <TextField
-            size="small"
-            label="Max price"
-            value={filters.maxPrice}
-            onChange={(event) =>
-              setFilters({ ...filters, maxPrice: event.target.value })
-            }
-            slotProps={{
-              input: {
-                startAdornment: (
-                  <InputAdornment position="start">UGX</InputAdornment>
-                ),
-              },
-            }}
-          />
-          <Button type="submit" variant="contained" size="large">
-            Search
-          </Button>
+          <div className="filter-mobile-summary">
+            <Box>
+              <Typography className="filter-intro-title">
+                Find your Prefered Lisitng
+              </Typography>
+              <Typography className="filter-intro-copy">
+                Search by District or Price
+              </Typography>
+            </Box>
+            <Button
+              type="button"
+              variant="contained"
+              startIcon={<FilterListIcon />}
+              onClick={() => setMobileFiltersOpen(true)}
+            >
+              Filter
+            </Button>
+          </div>
+          <div className="filter-card-fields">{renderFilterFields()}</div>
         </Paper>
       </Container>
 
-      <Container maxWidth="xl" sx={{ pt: 8, pb: 1 }}>
+      <Container maxWidth="xl" sx={{ pt: 4, pb: 1 }}>
         <section ref={homeListingsSectionRef}>
           <Paper className="home-listings-table-shell">
-            <Tabs
-              value={homeListingsTab}
-              onChange={(_, value: "featured" | "all") => {
-                setVisibleHomeListingsCount(HOME_LISTINGS_BATCH_SIZE);
-                setHomeListingsTab(value);
-              }}
-              textColor="primary"
-              indicatorColor="primary"
-              sx={{ px: 2, pt: 2, mb: 3 }}
-            >
-              <Tab value="featured" label="Featured for You" />
-              <Tab value="all" label="All" />
-            </Tabs>
+            <div className="home-listings-tabs-row">
+              <Tabs
+                value={homeListingsTab}
+                onChange={(_, value: "featured" | "all") => {
+                  setVisibleHomeListingsCount(HOME_LISTINGS_BATCH_SIZE);
+                  setHomeListingsTab(value);
+                }}
+                textColor="primary"
+                indicatorColor="primary"
+                sx={{ px: 2, pt: 2 }}
+              >
+                <Tab value="featured" label="Featured for You" />
+                <Tab value="all" label="All" />
+              </Tabs>
+            </div>
             {listingsLoading ? (
               <ListingCardLoader count={4} className="home-listing-grid" />
             ) : (
@@ -911,7 +1102,6 @@ function HomePage({
                           listing={listing}
                           onOpenSiteVisit={onOpenSiteVisit}
                           onOpenOffer={onOpenOffer}
-                          onOpenArticle={onOpenArticle}
                           onRegisterView={onRegisterView}
                         />
                       ))}
@@ -937,7 +1127,6 @@ function HomePage({
                         listing={listing}
                         onOpenSiteVisit={onOpenSiteVisit}
                         onOpenOffer={onOpenOffer}
-                        onOpenArticle={onOpenArticle}
                         onRegisterView={onRegisterView}
                       />
                     ))}
@@ -951,15 +1140,44 @@ function HomePage({
                   </Box>
                 )}
                 {homeSourceListings.length > visibleHomeListings.length ? (
-                  <Box className="dashboard-load-more-trigger">
-                    <CircularProgress size={24} color="warning" />
-                  </Box>
+                  <Box
+                    ref={homeListingsLoadMoreRef}
+                    className="dashboard-load-more-trigger listing-lazy-load-trigger"
+                    aria-hidden="true"
+                  />
                 ) : null}
               </>
             )}
           </Paper>
         </section>
       </Container>
+      <Dialog
+        open={mobileFiltersOpen}
+        onClose={() => setMobileFiltersOpen(false)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <Box
+          component="form"
+          onSubmit={(event) => {
+            handleFilterSubmit(event);
+            setMobileFiltersOpen(false);
+          }}
+        >
+          <DialogTitle>Filter listings</DialogTitle>
+          <DialogContent>
+            <div className="filter-card filter-card-dialog">
+              {renderFilterFields(false)}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setMobileFiltersOpen(false)}>Close</Button>
+            <Button type="submit" variant="contained">
+              Search
+            </Button>
+          </DialogActions>
+        </Box>
+      </Dialog>
     </>
   );
 }
@@ -968,14 +1186,12 @@ function ListingArticlePage({
   listings,
   onOpenSiteVisit,
   onOpenOffer,
-  onOpenArticle,
   onRegisterView,
   getViewerKey,
 }: {
   listings: Listing[];
   onOpenSiteVisit: (listing: Listing) => void;
   onOpenOffer: (listing: Listing) => void;
-  onOpenArticle: (listing: Listing) => void;
   onRegisterView: (listingId: number) => void;
   getViewerKey: () => string;
 }) {
@@ -1013,7 +1229,11 @@ function ListingArticlePage({
   }, [listingId]);
 
   if (loading) {
-    return <PageLoader />;
+    return (
+      <Container maxWidth="xl" className="listing-article-loading-shell">
+        <PageLoader />
+      </Container>
+    );
   }
 
   if (!listing) {
@@ -1051,6 +1271,12 @@ function ListingArticlePage({
       return firstMatchesDistrict - secondMatchesDistrict;
     })
     .slice(0, 4);
+  const articleState = {
+    backTo: getListingArticleBackTo(
+      location.pathname,
+      location.state as ListingArticleLocationState | null,
+    ),
+  };
   const featuresByCategory = LISTING_FEATURE_CATEGORIES.map((category) => ({
     ...category,
     features:
@@ -1109,7 +1335,7 @@ function ListingArticlePage({
   return (
     <Container maxWidth="xl" sx={{ py: 5 }}>
       <div className="listing-article-page">
-        <div className="page-hero">
+        <Paper className="listing-article-paper" elevation={2}>
           <IconButton
             aria-label="Go back"
             className="listing-back-button"
@@ -1117,190 +1343,189 @@ function ListingArticlePage({
           >
             <ArrowBackIcon />
           </IconButton>
-          <Typography variant="h3">{listing.title}</Typography>
-          <Typography color="text.secondary">
-            {[listing.address, listing.city, listing.district]
-              .filter(Boolean)
-              .join(", ")}
-          </Typography>
-        </div>
-        <div className="listing-article-layout">
-          <div className="listing-article-media">
-            <div className="listing-article-image-stage">
-              <CardMedia
-                component="img"
-                className="listing-article-main-image"
-                image={selectedImage || resolveImage(listing.thumbnail_url)}
-                alt={listing.title}
-              />
-              {showGalleryControls ? (
-                <>
-                  <IconButton
-                    className="listing-gallery-nav listing-gallery-nav-previous"
-                    aria-label="Show previous listing image"
-                    onClick={showPreviousImage}
-                  >
-                    <ChevronLeftIcon />
-                  </IconButton>
-                  <IconButton
-                    className="listing-gallery-nav listing-gallery-nav-next"
-                    aria-label="Show next listing image"
-                    onClick={showNextImage}
-                  >
-                    <ChevronRightIcon />
-                  </IconButton>
-                </>
-              ) : null}
-            </div>
-            <div className="listing-gallery-preview-row">
-              {galleryImages.length ? (
-                <div className="listing-article-thumbnails">
-                  {galleryImages.map((image, index) => (
-                    <button
-                      key={`${image}-${index}`}
-                      type="button"
-                      className={`listing-article-thumbnail${
-                        index === selectedImageIndex
-                          ? " listing-article-thumbnail-active"
-                          : ""
-                      }`}
-                      onClick={() => setSelectedImage(resolveImage(image))}
+          <div className="page-hero">
+            <Typography variant="h4" className="listing-article-title">
+              {listing.title}
+            </Typography>
+            <Divider />
+            <Typography
+              color="text.secondary"
+              className="listing-article-location"
+            >
+              <PlaceOutlinedIcon fontSize="inherit" />
+              {[listing.address, listing.city, listing.district]
+                .filter(Boolean)
+                .join(", ")}
+            </Typography>
+          </div>
+          <div className="listing-article-layout">
+            <div className="listing-article-media">
+              <div className="listing-article-image-stage">
+                <div className="listing-sold-ribbon">{listing.status}</div>
+                <CardMedia
+                  component="img"
+                  className="listing-article-main-image"
+                  image={selectedImage || resolveImage(listing.thumbnail_url)}
+                  alt={listing.title}
+                />
+                <Chip
+                  label={formatPrice(listing.price)}
+                  className="listing-thumbnail-price"
+                />
+                {showGalleryControls ? (
+                  <>
+                    <IconButton
+                      className="listing-gallery-nav listing-gallery-nav-previous"
+                      aria-label="Show previous listing image"
+                      onClick={showPreviousImage}
                     >
-                      <img
-                        src={resolveImage(image)}
-                        alt={`${listing.title} ${index + 1}`}
-                      />
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-              <div className="listing-gallery-actions">
-                <Button
-                  variant="contained"
-                  size="small"
-                  onClick={() => onOpenOffer(listing)}
-                >
-                  Give an Offer
-                </Button>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  onClick={() => onOpenSiteVisit(listing)}
-                >
-                  Site Visit
-                </Button>
+                      <ChevronLeftIcon />
+                    </IconButton>
+                    <IconButton
+                      className="listing-gallery-nav listing-gallery-nav-next"
+                      aria-label="Show next listing image"
+                      onClick={showNextImage}
+                    >
+                      <ChevronRightIcon />
+                    </IconButton>
+                  </>
+                ) : null}
               </div>
-              <div className="listing-gallery-rating">
-                <Typography variant="body2" color="text.secondary">
-                  Rate this site
-                </Typography>
-                <Rating
-                  value={siteRating}
-                  precision={0.5}
-                  onChange={(_, value) => void handleSiteRatingChange(value)}
+              <div className="listing-gallery-preview-row">
+                {galleryImages.length ? (
+                  <div className="listing-article-thumbnails">
+                    {galleryImages.map((image, index) => (
+                      <button
+                        key={`${image}-${index}`}
+                        type="button"
+                        className={`listing-article-thumbnail${
+                          index === selectedImageIndex
+                            ? " listing-article-thumbnail-active"
+                            : ""
+                        }`}
+                        onClick={() => setSelectedImage(resolveImage(image))}
+                      >
+                        <img
+                          src={resolveImage(image)}
+                          alt={`${listing.title} ${index + 1}`}
+                        />
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="listing-gallery-actions">
+                  <Button
+                    variant="contained"
+                    size="small"
+                    onClick={() => onOpenOffer(listing)}
+                  >
+                    Give an Offer
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={() => onOpenSiteVisit(listing)}
+                  >
+                    Site Visit
+                  </Button>
+                </div>
+                <div className="listing-gallery-rating">
+                  <Typography variant="body2" color="text.secondary">
+                    Rate this site
+                  </Typography>
+                  <Rating
+                    value={siteRating}
+                    precision={0.5}
+                    onChange={(_, value) => void handleSiteRatingChange(value)}
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="listing-article-copy">
+              <div className="listing-top-row">
+                <Chip
+                  label={listing.size_text || "Size not added"}
+                  variant="outlined"
+                  className="listing-size-chip"
+                />
+                <Chip
+                  label={listing.purpose ?? listing.category}
+                  color="primary"
+                />
+                <Chip
+                  label={`${listing.total_views} views`}
+                  variant="outlined"
+                  className="listing-size-chip"
+                  icon={<VisibilityOutlinedIcon fontSize="small" />}
+                />
+                <Chip
+                  label={`${siteRating ?? 0} stars`}
+                  variant="outlined"
+                  className="listing-size-chip"
+                  icon={<StarIcon fontSize="small" />}
                 />
               </div>
-            </div>
-          </div>
-          <div className="listing-article-copy">
-            <div className="listing-top-row">
-              <Chip
-                label={listing.purpose ?? listing.category}
-                color="primary"
-              />
-              <Chip
-                label={formatPrice(listing.price)}
-                color="secondary"
-                variant="outlined"
-                className="listing-amount-chip"
-              />
-              <Chip
-                label={`${listing.total_views} views`}
-                icon={<VisibilityOutlinedIcon fontSize="small" />}
-              />
-            </div>
-            <Typography variant="body1" color="text.secondary">
-              {listing.description}
-            </Typography>
-            <div className="listing-article-info-grid">
-              <div className="listing-article-details">
-                <Typography>
-                  <strong>District:</strong> {listing.district}
-                </Typography>
-                <Typography>
-                  <strong>City:</strong> {listing.city || "Not added"}
-                </Typography>
-                <Typography>
-                  <strong>Address:</strong> {listing.address || "Not added"}
-                </Typography>
-                <Typography>
-                  <strong>Category:</strong> {listing.category}
-                </Typography>
-                <Typography>
-                  <strong>Size:</strong> {listing.size_text || "Not added"}
-                </Typography>
-                <Typography>
-                  <strong>Status:</strong> {listing.status}
-                </Typography>
-                <Typography>
-                  <strong>Title transfer charges:</strong>{" "}
-                  {listing.title_transfer_charges
-                    ? formatPrice(listing.title_transfer_charges)
-                    : "Not added"}
-                </Typography>
-                <Typography>
-                  <strong>Posted:</strong>{" "}
-                  {formatTimeSincePosted(listing.created_at)}
-                </Typography>
-              </div>
-              <div className="listing-article-features">
-                <Typography variant="h6">Site Features</Typography>
-                <Divider />
-                <div className="listing-feature-category-list">
-                  {featuresByCategory.map(({ label, icon, features }) => (
-                    <div key={label} className="listing-feature-category">
-                      <Typography
-                        variant="subtitle2"
-                        className="listing-feature-category-title"
-                      >
-                        {icon}
-                        {label}
-                      </Typography>
-                      {features.length ? (
-                        <div className="listing-feature-list">
-                          {features.map((feature) => (
-                            <Typography
-                              key={feature.id}
-                              variant="body2"
-                              className="listing-feature-item"
-                            >
-                              {feature.title}
-                            </Typography>
-                          ))}
-                        </div>
-                      ) : (
-                        <Typography variant="body2" color="text.secondary">
-                          No features added.
+              <Typography variant="body1" color="text.secondary">
+                {listing.description}
+              </Typography>
+              <div className="listing-article-info-grid">
+                <div className="listing-article-features">
+                  <Typography variant="h6">Site Features</Typography>
+                  <Divider />
+                  <div className="listing-feature-category-list">
+                    {featuresByCategory.map(({ label, icon, features }) => (
+                      <div key={label} className="listing-feature-category">
+                        <Typography
+                          variant="subtitle2"
+                          className="listing-feature-category-title"
+                        >
+                          {icon}
+                          {label}
                         </Typography>
-                      )}
-                    </div>
-                  ))}
+                        {features.length ? (
+                          <div className="listing-feature-list">
+                            {features.map((feature) => (
+                              <Typography
+                                key={feature.id}
+                                variant="body2"
+                                className="listing-feature-item"
+                              >
+                                {feature.title}
+                              </Typography>
+                            ))}
+                          </div>
+                        ) : (
+                          <Typography variant="body2" color="text.secondary">
+                            No features added.
+                          </Typography>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            className="listing-article-posted-time"
+          >
+            <AccessTimeOutlinedIcon fontSize="inherit" />
+            Posted {formatTimeSincePosted(listing.created_at)}
+          </Typography>
+        </Paper>
         <div className="listing-article-map-section">
-          <Paper className="listing-you-may-like-card" elevation={2}>
+          <Card className="listing-you-may-like-card" elevation={2}>
             <Typography variant="h5">Listings you may like</Typography>
             <div className="listing-suggestions-list">
               {suggestedListings.length ? (
                 suggestedListings.map((suggestedListing) => (
-                  <button
+                  <Link
                     key={suggestedListing.id}
-                    type="button"
+                    to={`/listings/${suggestedListing.id}`}
+                    state={articleState}
                     className="listing-suggestion-row"
-                    onClick={() => onOpenArticle(suggestedListing)}
                   >
                     <img
                       src={resolveImage(suggestedListing.thumbnail_url)}
@@ -1324,7 +1549,7 @@ function ListingArticlePage({
                         {formatPrice(suggestedListing.price)}
                       </Typography>
                     </span>
-                  </button>
+                  </Link>
                 ))
               ) : (
                 <Typography color="text.secondary">
@@ -1332,8 +1557,8 @@ function ListingArticlePage({
                 </Typography>
               )}
             </div>
-          </Paper>
-          <Paper className="listing-article-map" elevation={2}>
+          </Card>
+          <Card className="listing-article-map" elevation={2}>
             <Typography variant="h5">Site Location</Typography>
             <Divider />
             <iframe
@@ -1341,203 +1566,472 @@ function ListingArticlePage({
               src={`https://maps.google.com/maps?q=${encodeURIComponent(mapQuery)}&output=embed`}
               loading="lazy"
             />
-          </Paper>
+          </Card>
         </div>
       </div>
     </Container>
   );
 }
 
-function AboutPage() {
+function getBonusSection(
+  sections: BonusSection[],
+  heading: string,
+  fallback: string,
+) {
   return (
-    <Container maxWidth="xl" sx={{ py: 8 }}>
-      <section className="page-hero">
-        <Chip label="About SAM.UG" color="primary" sx={{ mb: 2 }} />
-        <Typography variant="h2" sx={{ mb: 2 }}>
-          Who we are
-        </Typography>
-        <Typography color="text.secondary" sx={{ maxWidth: 900 }}>
-          SAM.UG is a modern and trusted land marketing platform powered by
-          Solvent Asset Management, created to simplify and improve the way land
-          is bought and sold through transparency, professionalism and direct
-          connections.
-        </Typography>
-      </section>
+    sections.find((section) =>
+      section.heading.toLowerCase().includes(heading.toLowerCase()),
+    )?.body ?? fallback
+  );
+}
 
-      <section className="section-gap two-column">
-        <Card elevation={0} className="feature-panel">
-          <CardContent>
-            <Typography variant="h3" sx={{ mb: 2 }}>
-              Our Values
-            </Typography>
-            <Typography color="text.secondary" sx={{ mb: 3 }}>
-              We build trust through clear principles and exceptional service.
-              These pillars shape every decision, interaction and product we
-              deliver.
-            </Typography>
-            <div className="stats-grid">
-              <Paper className="stat-card">
-                <Typography variant="h4" color="primary.main">
-                  10k+
-                </Typography>
-                <Typography color="text.secondary">
-                  Satisfied customers
-                </Typography>
-              </Paper>
-              <Paper className="stat-card">
-                <Typography variant="h4" color="primary.main">
-                  12
-                </Typography>
-                <Typography color="text.secondary">
-                  Years of experience
-                </Typography>
-              </Paper>
-              <Paper className="stat-card">
-                <Typography variant="h4" color="primary.main">
-                  24h
-                </Typography>
-                <Typography color="text.secondary">Avg response</Typography>
-              </Paper>
-            </div>
-            <div className="listing-grid">
-              {[
-                "Personalization",
-                "Integrity",
-                "Time and Effort",
-                "Empathy",
-                "Exceptional Customer Experience",
-                "Resolution",
-              ].map((item) => (
-                <Paper key={item} className="text-panel">
-                  <Typography sx={{ fontWeight: 800, mb: 1 }}>
-                    {item}
-                  </Typography>
-                  <Typography color="text.secondary">
-                    We use {item.toLowerCase()} to shape trustworthy property
-                    experiences.
-                  </Typography>
-                </Paper>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-        <div className="side-column">
-          <Paper className="text-panel">
-            <Typography variant="h5" sx={{ mb: 2 }}>
-              Who we serve
-            </Typography>
-            <div className="chip-row">
-              {[
-                "Landlords",
-                "Kibanja Owners",
-                "Tenants",
-                "Brokers",
-                "Service Providers",
-              ].map((item) => (
-                <Chip key={item} label={item} />
-              ))}
-            </div>
-          </Paper>
-          <Paper className="text-panel">
-            <Typography variant="h5" sx={{ mb: 2 }}>
-              Impact snapshot
-            </Typography>
+function AboutPage({ bonusSections }: { bonusSections: BonusSection[] }) {
+  const location = useLocation();
+  const samOverview = getBonusSection(
+    bonusSections,
+    "What is SAM",
+    fallbackBonus[0].body,
+  );
+  const whyUseSam = getBonusSection(
+    bonusSections,
+    "Why use",
+    fallbackBonus[0].body,
+  );
+  const landAdvertised = getBonusSection(
+    bonusSections,
+    "land do we advertise",
+    "SAM.UG advertises genuine, high-quality land that meets registration requirements and is ready for transparent buyer review.",
+  );
+  const marketingChecks = getBonusSection(
+    bonusSections,
+    "before marketing",
+    "Before listing any property, SAM.UG checks ownership readiness, land-search status, owner identification, clear photos, title information and realistic pricing.",
+  );
+  const agentGuidance = getBonusSection(
+    bonusSections,
+    "agent account",
+    "Agents can apply through SAM.UG and begin uploading land for approval after administrator review.",
+  );
+  const wishGuidance = getBonusSection(
+    bonusSections,
+    "My Wish",
+    "Customers can submit their property wish and the team follows up with suitable suggestions.",
+  );
+  const offerGuidance = getBonusSection(
+    bonusSections,
+    "GIVE AN OFFER",
+    "Buyers can open a listing, submit an offer, and receive follow-up from the Solvent team.",
+  );
+  const companyBenefit = getBonusSection(
+    bonusSections,
+    "BENEFIT",
+    "SAM.UG helps Solvent Asset Management reduce risk in land transactions, reach a wider audience and offer services such as consultations, due diligence, title processing, surveying and land management.",
+  );
+
+  useEffect(() => {
+    if (!location.hash) {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+
+    const target = document.getElementById(location.hash.slice(1));
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [location.hash]);
+
+  return (
+    <Container maxWidth="xl" sx={{ py: 6 }}>
+      <Grid container spacing={3} columns={{ xs: 1, md: 12 }}>
+        <Grid size={{ xs: 1, md: 8 }}>
+          <Paper className="about-hero-card" elevation={2}>
+            <Chip label="About Solvent Property Management" color="primary" />
+            <Typography variant="h2">Land marketing built on trust</Typography>
             <Typography color="text.secondary">
-              98% satisfaction and 24h average response, driven by faster
-              resolutions and reduced friction.
+              {samOverview}
             </Typography>
           </Paper>
-        </div>
-      </section>
+        </Grid>
+        <Grid className="about-anchor-grid" size={{ xs: 1, md: 4 }}>
+          <Card className="about-anchor-card" elevation={2}>
+            <Typography variant="h5">Explore the company</Typography>
+            <div className="about-anchor-list">
+              {[
+                ["Our Values", "values"],
+                ["Mission & Vision", "mission"],
+                ["Objectives", "objectives"],
+                ["Guidance", "guidance"],
+              ].map(([label, hash]) => (
+                <Button
+                  key={hash}
+                  component={Link}
+                  to={`/about#${hash}`}
+                  variant="outlined"
+                  size="small"
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
+          </Card>
+        </Grid>
 
-      <section className="section-gap two-column">
-        <Paper className="text-panel">
-          <Typography variant="h3" sx={{ mb: 2 }}>
-            Mission & Vision
-          </Typography>
-          <Typography color="text.secondary" sx={{ mb: 2 }}>
-            We connect people to land and buildings with professionalism,
-            empathy and measurable value.
-          </Typography>
-          <Typography sx={{ fontWeight: 800, mb: 1 }}>Mission</Typography>
-          <Typography color="text.secondary" sx={{ mb: 2 }}>
-            To be a nationwide link of peace between landlords and Kibanja
-            owners, landlords and tenants, and investors.
-          </Typography>
-          <Typography sx={{ fontWeight: 800, mb: 1 }}>Vision</Typography>
-          <Typography color="text.secondary">
-            To bridge the gap in professionalism across asset management,
-            raising standards and delivering consistent outcomes.
-          </Typography>
-        </Paper>
-        <Paper className="text-panel">
-          <Typography variant="h3" sx={{ mb: 2 }}>
-            Our Objectives
-          </Typography>
-          <div className="bullet-list">
+        <Grid size={{ xs: 1, md: 12 }}>
+          <Grid container spacing={3} columns={{ xs: 1, md: 12 }}>
             {[
-              "Resolve landlord-tenant conflicts",
-              "Promote peaceful coexistence",
-              "Facilitate peaceful family land use",
-              "Enable financial access and simplify sales",
-            ].map((item) => (
-              <Chip key={item} label={item} />
+              ["Verified listings", "Preliminary ownership checks help reduce hidden transaction risk."],
+              ["Direct connections", "Landowners connect with serious buyers without unnecessary middlemen."],
+              ["Free consultations", "The team guides buyers and sellers before they commit."],
+              ["Paid due diligence", "Optional deeper checks support safer, better-informed decisions."],
+            ].map(([title, body]) => (
+              <Grid key={title} size={{ xs: 1, md: 3 }}>
+                <Paper className="about-metric-card" elevation={1}>
+                  <Typography variant="h6">{title}</Typography>
+                  <Typography color="text.secondary">{body}</Typography>
+                </Paper>
+              </Grid>
             ))}
-          </div>
-          <Typography color="text.secondary" sx={{ mt: 2 }}>
-            Clear, practical objectives that reduce conflict, unlock value and
-            make land ownership secure and usable for families, investors and
-            communities.
-          </Typography>
-        </Paper>
-      </section>
+          </Grid>
+        </Grid>
+
+        <Grid id="values" className="about-scroll-section" size={{ xs: 1, md: 12 }}>
+          <Card elevation={0} className="feature-panel about-section-card">
+          <CardContent>
+            <div className="about-section-header">
+              <Chip label="Our Values" color="warning" sx={{ mb: 2 }} />
+              <Typography variant="h3" sx={{ mb: 2 }}>
+                Our Values
+              </Typography>
+              <Typography color="text.secondary" sx={{ mb: 3 }}>
+                SAM.UG is built on the values named throughout the company
+                guidance: transparency, reliability, professionalism, honesty
+                and trust. These values guide how properties are checked,
+                marketed and followed up.
+              </Typography>
+            </div>
+            <Grid container spacing={2} columns={{ xs: 1, sm: 2, md: 5 }}>
+              {[
+                ["Transparency", "Clear checks, open negotiations and no hidden ownership risks."],
+                ["Reliability", "A consistent process from listing to final transaction."],
+                ["Professionalism", "Guided consultations, due diligence and structured follow-up."],
+                ["Honesty", "Direct buyer-to-owner engagement without broker-style control."],
+                ["Trust", "Genuine land, realistic information and informed decision-making."],
+              ].map(([title, body]) => (
+                <Grid key={title} size={{ xs: 1, sm: 1, md: 1 }}>
+                  <Paper className="about-value-card">
+                    <Typography sx={{ fontWeight: 800, mb: 1 }}>{title}</Typography>
+                    <Typography color="text.secondary">{body}</Typography>
+                  </Paper>
+                </Grid>
+              ))}
+            </Grid>
+          </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid id="mission" className="about-scroll-section" size={{ xs: 1, md: 12 }}>
+          <Grid container spacing={3} columns={{ xs: 1, md: 2 }}>
+            <Grid size={{ xs: 1, md: 1 }}>
+              <Paper className="about-large-card">
+                <Chip label="Mission" color="primary" sx={{ mb: 2 }} />
+                <Typography variant="h4" sx={{ mb: 2 }}>
+                  Deliver trusted real estate solutions.
+                </Typography>
+                <Typography color="text.secondary">
+                  {companyBenefit}
+                </Typography>
+              </Paper>
+            </Grid>
+            <Grid size={{ xs: 1, md: 1 }}>
+              <Paper className="about-large-card">
+                <Chip label="Vision" color="warning" sx={{ mb: 2 }} />
+                <Typography variant="h4" sx={{ mb: 2 }}>
+                  Increase transparency in land transactions.
+                </Typography>
+                <Typography color="text.secondary">
+                  SAM.UG exists to make land ownership more accessible,
+                  transparent and secure by connecting genuine sellers to
+                  serious buyers with a clear, dependable process.
+                </Typography>
+              </Paper>
+            </Grid>
+          </Grid>
+        </Grid>
+
+        <Grid id="objectives" className="about-scroll-section" size={{ xs: 1, md: 12 }}>
+          <Paper className="about-section-card">
+            <div className="about-section-header">
+              <Chip label="Objectives" color="primary" sx={{ mb: 2 }} />
+              <Typography variant="h3" sx={{ mb: 2 }}>
+                What the platform is designed to achieve
+              </Typography>
+            </div>
+            <Grid container spacing={2} columns={{ xs: 1, md: 2 }}>
+              {[
+                ["Reduce transaction risk", whyUseSam],
+                ["Advertise genuine land", landAdvertised],
+                ["Prepare market-ready listings", marketingChecks],
+                ["Connect buyers and sellers directly", "Once a serious buyer is engaged, SAM.UG connects them directly to the landowner for site visits, inspections and open negotiations."],
+              ].map(([title, body]) => (
+                <Grid key={title} size={{ xs: 1, md: 1 }}>
+                  <Paper className="about-objective-card" variant="outlined">
+                    <Typography variant="h5">{title}</Typography>
+                    <Typography color="text.secondary">{body}</Typography>
+                  </Paper>
+                </Grid>
+              ))}
+            </Grid>
+          </Paper>
+        </Grid>
+
+        <Grid id="guidance" className="about-scroll-section" size={{ xs: 1, md: 12 }}>
+          <Paper className="about-section-card">
+            <div className="about-section-header">
+              <Chip label="Guidance" color="warning" sx={{ mb: 2 }} />
+              <Typography variant="h3" sx={{ mb: 2 }}>
+                How to use SAM.UG
+              </Typography>
+            </div>
+            <Grid container spacing={2} columns={{ xs: 1, md: 3 }}>
+              {[
+                ["Create an Agent Account", agentGuidance],
+                ["Use My Wish", wishGuidance],
+                ["Give an Offer", offerGuidance],
+              ].map(([title, body]) => (
+                <Grid key={title} size={{ xs: 1, md: 1 }}>
+                  <Card className="about-guidance-card" elevation={1}>
+                    <CardContent>
+                      <Typography variant="h5" sx={{ mb: 1 }}>
+                        {title}
+                      </Typography>
+                      <Typography color="text.secondary">{body}</Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              ))}
+            </Grid>
+          </Paper>
+        </Grid>
+      </Grid>
     </Container>
   );
 }
 
 function ContactPage() {
+  const [emailMenuAnchor, setEmailMenuAnchor] = useState<HTMLElement | null>(
+    null,
+  );
+  const officeLatitude = 0.3699001845277436;
+  const officeLongitude = 32.69895912681014;
+  const mapQuery = `${officeLatitude},${officeLongitude}`;
+  const mapDirectionsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapQuery)}`;
+  const contactEmail = "solventug@gmail.com";
+  const emailSubject = "Property enquiry";
+  const emailBody =
+    "Hello Solvent Asset Management team,%0A%0AI would like to make an enquiry.";
+  const emailOptions = [
+    {
+      label: "Default email app",
+      href: `mailto:${contactEmail}?subject=${encodeURIComponent(emailSubject)}&body=${emailBody}`,
+    },
+    {
+      label: "Gmail",
+      href: `https://mail.google.com/mail/?view=cm&fs=1&to=${contactEmail}&su=${encodeURIComponent(emailSubject)}&body=${emailBody}`,
+    },
+    {
+      label: "Outlook",
+      href: `https://outlook.live.com/mail/0/deeplink/compose?to=${contactEmail}&subject=${encodeURIComponent(emailSubject)}&body=${emailBody}`,
+    },
+    {
+      label: "Yahoo Mail",
+      href: `https://compose.mail.yahoo.com/?to=${contactEmail}&subject=${encodeURIComponent(emailSubject)}&body=${emailBody}`,
+    },
+  ];
+
   return (
-    <Container maxWidth="xl" sx={{ py: 8 }}>
-      <section className="page-hero">
-        <Chip label="Get in touch" color="primary" sx={{ mb: 2 }} />
-        <Typography variant="h2" sx={{ mb: 2 }}>
-          Contact Us
-        </Typography>
-        <Typography color="text.secondary" sx={{ maxWidth: 900 }}>
-          We're here to help with surveys, disputes, succession planning,
-          valuations and general enquiries. planning, valuations and general
-          enquiries.
-        </Typography>
-      </section>
-      <section className="section-gap two-column">
-        <Paper className="text-panel">
-          <Typography variant="h5" sx={{ mb: 2 }}>
-            Visit our office
-          </Typography>
-          <Typography sx={{ mb: 1 }}>
-            Namanve Industrial Park - Kiwanga, Off Jomayi stones.
-          </Typography>
-          <Typography sx={{ mb: 1 }}>P.O Box 129, Mukono, Uganda.</Typography>
-          <Typography>Near Sadoline paints.</Typography>
-        </Paper>
-        <Paper className="text-panel">
-          <Typography variant="h5" sx={{ mb: 2 }}>
-            Contact details
-          </Typography>
-          <Typography sx={{ mb: 1 }}>
-            <strong>Email:</strong> solventug@gmail.com
-          </Typography>
-          <Typography sx={{ mb: 1 }}>
-            <strong>Call:</strong> (256)7 63 615 316
-          </Typography>
-          <Typography sx={{ mb: 1 }}>
-            <strong>Call:</strong> (256)7 52 440 513
-          </Typography>
-          <Typography>
-            <strong>Coordinates:</strong> 0.3699001845277436, 32.69895912681014
-          </Typography>
-        </Paper>
-      </section>
+    <Container maxWidth="xl" sx={{ pt: 5, pb: 1 }}>
+      <Grid container spacing={3} columns={{ xs: 1, md: 12 }}>
+        <Grid size={{ xs: 0, md: 1 }} />
+        <Grid size={{ xs: 1, md: 10 }}>
+          <Grid container spacing={3} columns={{ xs: 1, md: 3 }}>
+            <Grid size={{ xs: 1, md: 3 }}>
+              <Paper
+                className="contact-hero-copy"
+                elevation={2}
+                sx={{
+                  background:
+                    "radial-gradient(circle at 92% 8%, rgba(239, 91, 43, 0.22), transparent 36%), radial-gradient(circle at 8% 100%, rgba(16, 31, 48, 0.12), transparent 38%), linear-gradient(135deg, rgba(255, 226, 212, 0.72) 0%, rgba(244, 192, 170, 0.58) 42%, rgba(219, 233, 248, 0.64) 100%)",
+                  backgroundColor: "rgba(244, 192, 170, 0.46)",
+                }}
+              >
+                <div className="contact-hero-content">
+                  <Chip
+                    label="Get in touch"
+                    color="primary"
+                    sx={{ width: "fit-content" }}
+                  />
+                  <Typography variant="h4" className="contact-page-title">
+                    Contact Us
+                  </Typography>
+                  <Typography color="text.secondary" sx={{ maxWidth: "100%" }}>
+                    We help with land sales, surveys, valuation support,
+                    succession planning, dispute resolution and general property
+                    enquiries. Reach out and our team will guide you to the
+                    right next step.
+                  </Typography>
+                </div>
+                <div className="contact-hero-illustration" aria-hidden="true">
+                  <div className="contact-illustration-card contact-illustration-card-main">
+                    <EmailOutlinedIcon />
+                    <span>Send a Message</span>
+                  </div>
+                  <div className="contact-illustration-card contact-illustration-card-phone">
+                    <PhoneOutlinedIcon />
+                    <span>Call support</span>
+                  </div>
+                  <div className="contact-illustration-pin">
+                    <PlaceOutlinedIcon />
+                  </div>
+                </div>
+              </Paper>
+            </Grid>
+
+            <Grid size={{ xs: 1, md: 1 }}>
+              <Paper className="contact-card" elevation={2}>
+                <div className="contact-card-icon">
+                  <PlaceOutlinedIcon />
+                </div>
+                <div>
+                  <Typography variant="h5" sx={{ mb: 1 }}>
+                    Visit our office
+                  </Typography>
+                  <Typography color="text.secondary" sx={{ mb: 1 }}>
+                    Namanve Industrial Park - Kiwanga, Off Jomayi stones.
+                  </Typography>
+                  <Typography color="text.secondary" sx={{ mb: 1 }}>
+                    P.O Box 129, Mukono, Uganda.
+                  </Typography>
+                  <Typography color="text.secondary">
+                    Near Sadoline paints.
+                  </Typography>
+                </div>
+              </Paper>
+            </Grid>
+
+            <Grid size={{ xs: 1, md: 1 }}>
+              <Paper className="contact-card" elevation={2}>
+                <div className="contact-card-icon">
+                  <EmailOutlinedIcon />
+                </div>
+                <div>
+                  <Typography variant="h5" sx={{ mb: 1 }}>
+                    Email Us
+                  </Typography>
+                  <Typography color="text.secondary" sx={{ mb: 1 }}>
+                    Send us your enquiry and our team will follow up.
+                  </Typography>
+                  <div className="contact-detail-list">
+                    <a href={`mailto:${contactEmail}`}>{contactEmail}</a>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="contained"
+                    startIcon={<EmailOutlinedIcon />}
+                    sx={{ mt: 2 }}
+                    onClick={(event) => setEmailMenuAnchor(event.currentTarget)}
+                  >
+                    Message
+                  </Button>
+                  <Menu
+                    anchorEl={emailMenuAnchor}
+                    open={Boolean(emailMenuAnchor)}
+                    onClose={() => setEmailMenuAnchor(null)}
+                  >
+                    {emailOptions.map((option) => (
+                      <MenuItem
+                        key={option.label}
+                        component="a"
+                        href={option.href}
+                        target={
+                          option.label === "Default email app"
+                            ? undefined
+                            : "_blank"
+                        }
+                        rel={
+                          option.label === "Default email app"
+                            ? undefined
+                            : "noreferrer"
+                        }
+                        onClick={() => setEmailMenuAnchor(null)}
+                      >
+                        {option.label}
+                      </MenuItem>
+                    ))}
+                  </Menu>
+                </div>
+              </Paper>
+            </Grid>
+
+            <Grid size={{ xs: 1, md: 1 }}>
+              <Paper className="contact-card" elevation={2}>
+                <div className="contact-card-icon">
+                  <PhoneOutlinedIcon />
+                </div>
+                <div>
+                  <Typography variant="h5" sx={{ mb: 1 }}>
+                    Call us
+                  </Typography>
+                  <Typography color="text.secondary" sx={{ mb: 1 }}>
+                    Speak directly with our office team.
+                  </Typography>
+                  <div className="contact-detail-list">
+                    <a href="tel:+256763615316">+256 763 615 316</a>
+                    <a href="tel:+256752440513">+256 752 440 513</a>
+                  </div>
+                  <Button
+                    component="a"
+                    href="tel:+256763615316"
+                    variant="contained"
+                    startIcon={<PhoneOutlinedIcon />}
+                    sx={{ mt: 2 }}
+                  >
+                    Call
+                  </Button>
+                </div>
+              </Paper>
+            </Grid>
+
+            <Grid size={{ xs: 1, md: 3 }}>
+              <Paper className="contact-map-card" elevation={2}>
+                <div className="contact-map-header">
+                  <div>
+                    <Typography variant="h4">Find us on the map</Typography>
+                    <Typography color="text.secondary">
+                      Use the map below to locate our office near Sadoline
+                      paints in Namanve Industrial Park.
+                    </Typography>
+                  </div>
+                  <Button
+                    component="a"
+                    href={mapDirectionsUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    variant="contained"
+                    endIcon={<CallMadeOutlinedIcon />}
+                  >
+                    Open directions
+                  </Button>
+                </div>
+                <iframe
+                  title="Solvent Asset Management office location"
+                  src={`https://maps.google.com/maps?q=${encodeURIComponent(mapQuery)}&z=16&output=embed`}
+                  loading="lazy"
+                  referrerPolicy="no-referrer-when-downgrade"
+                />
+              </Paper>
+            </Grid>
+          </Grid>
+        </Grid>
+        <Grid size={{ xs: 0, md: 1 }} />
+      </Grid>
     </Container>
   );
 }
@@ -1582,35 +2076,10 @@ function BlogPage() {
   );
 }
 
-function BonusInfoPage({ bonusSections }: { bonusSections: BonusSection[] }) {
-  return (
-    <Container maxWidth="xl" sx={{ py: 8 }}>
-      <section className="page-hero">
-        <Chip label="Bonus Info" color="primary" sx={{ mb: 2 }} />
-        <Typography variant="h2" sx={{ mb: 2 }}>
-          Bonus Info
-        </Typography>
-        <Typography color="text.secondary" sx={{ maxWidth: 900 }}>
-          Guidance content loaded from the backend documentation source.
-        </Typography>
-      </section>
-      <section className="section-gap bonus-info-grid">
-        {bonusSections.map((section) => (
-          <Paper key={section.heading} className="text-panel">
-            <Typography variant="h6" sx={{ mb: 1 }}>
-              {section.heading}
-            </Typography>
-            <Typography color="text.secondary">{section.body}</Typography>
-          </Paper>
-        ))}
-      </section>
-    </Container>
-  );
-}
-
 function App() {
   const location = useLocation();
   const navigate = useNavigate();
+  const isMobileDashboard = useMediaQuery("(max-width:760px)");
   const viewedListingIdsRef = useRef<Set<number>>(new Set());
   const listingsLoadMoreRef = useRef<HTMLDivElement | null>(null);
   const agentsLoadMoreRef = useRef<HTMLDivElement | null>(null);
@@ -1622,12 +2091,18 @@ function App() {
   );
   const [agentActionAnchor, setAgentActionAnchor] =
     useState<HTMLElement | null>(null);
+  const [userActionAnchor, setUserActionAnchor] =
+    useState<HTMLElement | null>(null);
   const [listingActionAnchor, setListingActionAnchor] =
     useState<HTMLElement | null>(null);
   const [drawerMode, setDrawerMode] = useState<DrawerMode>(null);
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [showSignupPassword, setShowSignupPassword] = useState(false);
   const [heroSlides, setHeroSlides] = useState<HeroSlide[]>(fallbackHero);
+  const [districtOptions, setDistrictOptions] = useState<string[]>([]);
+  const [areaOptionsByDistrict, setAreaOptionsByDistrict] = useState<
+    Record<string, string[]>
+  >({});
   const [featuredListings, setFeaturedListings] = useState<Listing[]>([]);
   const [latestListings, setLatestListings] = useState<Listing[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
@@ -1644,7 +2119,7 @@ function App() {
   const [siteVisits, setSiteVisits] = useState<SiteVisit[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedMenu, setSelectedMenu] = useState(() => {
     return (
       window.localStorage.getItem(DASHBOARD_MENU_STORAGE_KEY) ?? "Listings"
@@ -1727,12 +2202,17 @@ function App() {
     sold_at: null as Dayjs | null,
   });
   const [selectedAgent, setSelectedAgent] = useState<User | null>(null);
+  const [selectedAdminUser, setSelectedAdminUser] = useState<User | null>(null);
+  const [listingRecordsDialog, setListingRecordsDialog] =
+    useState<ListingRecordsDialogState | null>(null);
   const [recordActionAnchor, setRecordActionAnchor] =
     useState<HTMLElement | null>(null);
   const [selectedOperationalRecord, setSelectedOperationalRecord] =
     useState<SelectedOperationalRecord | null>(null);
   const [progressDialogOpen, setProgressDialogOpen] = useState(false);
   const [noteDialogOpen, setNoteDialogOpen] = useState(false);
+  const [notesDialogOpen, setNotesDialogOpen] = useState(false);
+  const [editingAdminUser, setEditingAdminUser] = useState<User | null>(null);
   const [forwardWishDialogOpen, setForwardWishDialogOpen] = useState(false);
   const [forwardWishMode, setForwardWishMode] = useState<
     "district" | "village" | "individual"
@@ -1785,7 +2265,7 @@ function App() {
     address: "",
     category: "Residential Land",
     size_text: "",
-    purpose: "Residential",
+    purpose: "",
     thumbnail_url: "",
     pictures: "",
     latitude: "",
@@ -1834,11 +2314,55 @@ function App() {
   const [authReady, setAuthReady] = useState(false);
   const isDashboardRoute = location.pathname === "/dashboard";
 
+  useLayoutEffect(() => {
+    if (location.pathname.startsWith("/listings/")) {
+      window.scrollTo(0, 0);
+    }
+  }, [location.pathname]);
+
+  useEffect(() => {
+    const brandTitle = "SAM.UG";
+    const listingIdMatch = location.pathname.match(/^\/listings\/(\d+)/);
+    const listingTitle = listingIdMatch
+      ? [...featuredListings, ...latestListings].find(
+          (listing) => listing.id === Number(listingIdMatch[1]),
+        )?.title
+      : null;
+    const routeTitle =
+      isDashboardRoute && user
+        ? `${selectedMenu} Dashboard`
+        : listingTitle
+          ? listingTitle
+          : location.pathname === "/"
+            ? "Home"
+            : location.pathname === "/about"
+              ? "About"
+              : location.pathname === "/contact"
+                ? "Contact"
+                : location.pathname === "/blog"
+                  ? "Blog"
+                  : "Home";
+
+    document.title = `${routeTitle} | ${brandTitle}`;
+  }, [
+    featuredListings,
+    isDashboardRoute,
+    latestListings,
+    location.pathname,
+    selectedMenu,
+    user,
+  ]);
+
   useEffect(() => {
     try {
-      const storedUser = window.localStorage.getItem(AUTH_STORAGE_KEY);
-      if (storedUser) {
-        setUser(JSON.parse(storedUser) as User);
+      const session = readStoredAuthSession();
+      if (session) {
+        if (Date.now() - session.lastActivityAt >= SESSION_TIMEOUT_MS) {
+          window.localStorage.removeItem(AUTH_STORAGE_KEY);
+        } else {
+          setUser(session.user);
+          writeAuthSession(session.user, session.lastActivityAt);
+        }
       }
     } catch {
       window.localStorage.removeItem(AUTH_STORAGE_KEY);
@@ -1849,7 +2373,27 @@ function App() {
 
   useEffect(() => {
     void loadPublicContent();
+    void loadDistrictOptions();
   }, []);
+
+  useEffect(() => {
+    [
+      filters.district,
+      profileForm.district,
+      listingForm.district,
+      editListingForm.district,
+      wishForm.district,
+    ].forEach((district) => {
+      void ensureDistrictAreas(district);
+    });
+  }, [
+    areaOptionsByDistrict,
+    editListingForm.district,
+    filters.district,
+    listingForm.district,
+    profileForm.district,
+    wishForm.district,
+  ]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -1889,12 +2433,98 @@ function App() {
     if (!authReady) return;
 
     if (user) {
-      window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
+      writeAuthSession(user);
       return;
     }
 
     window.localStorage.removeItem(AUTH_STORAGE_KEY);
   }, [authReady, user]);
+
+  useEffect(() => {
+    if (!authReady || !user) return;
+
+    let sessionTimer: number | undefined;
+    let lastPersistedActivity = 0;
+
+    const expireSession = () => {
+      window.localStorage.removeItem(AUTH_STORAGE_KEY);
+      setUser(null);
+      showFormAlert(
+        "error",
+        "Your session expired after 30 minutes of inactivity. Please log in again.",
+      );
+      navigate("/");
+    };
+
+    const scheduleSessionCheck = () => {
+      if (sessionTimer) {
+        window.clearTimeout(sessionTimer);
+      }
+
+      let lastActivityAt = Date.now();
+      try {
+        lastActivityAt = readStoredAuthSession()?.lastActivityAt ?? lastActivityAt;
+      } catch {
+        expireSession();
+        return;
+      }
+
+      const remainingMs = SESSION_TIMEOUT_MS - (Date.now() - lastActivityAt);
+      sessionTimer = window.setTimeout(
+        () => {
+          try {
+            const session = readStoredAuthSession();
+            if (
+              !session ||
+              Date.now() - session.lastActivityAt >= SESSION_TIMEOUT_MS
+            ) {
+              expireSession();
+              return;
+            }
+            scheduleSessionCheck();
+          } catch {
+            expireSession();
+          }
+        },
+        Math.max(0, Math.min(remainingMs, SESSION_CHECK_INTERVAL_MS)),
+      );
+    };
+
+    const refreshActivity = () => {
+      const now = Date.now();
+      if (now - lastPersistedActivity < 1000) return;
+
+      lastPersistedActivity = now;
+      writeAuthSession(user, now);
+      scheduleSessionCheck();
+    };
+
+    const activityEvents = [
+      "click",
+      "keydown",
+      "mousemove",
+      "scroll",
+      "touchstart",
+    ] as const;
+
+    activityEvents.forEach((eventName) => {
+      window.addEventListener(eventName, refreshActivity, { passive: true });
+    });
+    window.addEventListener("focus", scheduleSessionCheck);
+    document.addEventListener("visibilitychange", scheduleSessionCheck);
+    scheduleSessionCheck();
+
+    return () => {
+      if (sessionTimer) {
+        window.clearTimeout(sessionTimer);
+      }
+      activityEvents.forEach((eventName) => {
+        window.removeEventListener(eventName, refreshActivity);
+      });
+      window.removeEventListener("focus", scheduleSessionCheck);
+      document.removeEventListener("visibilitychange", scheduleSessionCheck);
+    };
+  }, [authReady, navigate, user]);
 
   useEffect(() => {
     window.localStorage.setItem(DASHBOARD_MENU_STORAGE_KEY, selectedMenu);
@@ -2031,8 +2661,27 @@ function App() {
     return offers.filter((offer) => offer.listing_id === listingId).length;
   }
 
+  function getListingOffers(listingId: number) {
+    return offers.filter((offer) => offer.listing_id === listingId);
+  }
+
   function getListingSiteVisitCount(listingId: number) {
     return siteVisits.filter((visit) => visit.listing_id === listingId).length;
+  }
+
+  function getListingSiteVisits(listingId: number) {
+    return siteVisits.filter((visit) => visit.listing_id === listingId);
+  }
+
+  function openListingRecordsDialog(
+    kind: ListingRecordsDialogState["kind"],
+    listing: Listing,
+  ) {
+    setListingRecordsDialog({ kind, listing });
+  }
+
+  function closeListingRecordsDialog() {
+    setListingRecordsDialog(null);
   }
 
   function getOperationalNoteCount(kind: OperationalRecordKind, id: number) {
@@ -2043,6 +2692,25 @@ function App() {
       return notes.filter((note) => note.site_visit_id === id).length;
     }
     return notes.filter((note) => note.offer_id === id).length;
+  }
+
+  function getOperationalNotes(kind: OperationalRecordKind, id: number) {
+    if (kind === "wish") {
+      return notes.filter((note) => note.wish_id === id);
+    }
+    if (kind === "siteVisit") {
+      return notes.filter((note) => note.site_visit_id === id);
+    }
+    return notes.filter((note) => note.offer_id === id);
+  }
+
+  function getOperationalRecordTitle(record: SelectedOperationalRecord | null) {
+    if (!record) return "Notes";
+    if (record.kind === "wish") return record.record.title;
+    if (record.kind === "siteVisit") {
+      return getListingTitle(record.record.listing_id);
+    }
+    return formatPrice(record.record.amount);
   }
 
   function openRecordActionMenu(
@@ -2060,12 +2728,19 @@ function App() {
   function closeOperationalDialogs() {
     setProgressDialogOpen(false);
     setNoteDialogOpen(false);
+    setNotesDialogOpen(false);
     setForwardWishDialogOpen(false);
     setSelectedOperationalRecord(null);
     setRecordStatusForm("pending");
     setNoteForm("");
     setForwardWishMode("district");
     setForwardWishAgents([]);
+  }
+
+  function openViewNotesDialog() {
+    if (!selectedOperationalRecord) return;
+    closeRecordActionMenu();
+    setNotesDialogOpen(true);
   }
 
   function openForwardWishDialog() {
@@ -2097,8 +2772,15 @@ function App() {
     });
   }
 
+  function openAddUserDrawer() {
+    setEditingAdminUser(null);
+    resetAdminUserForm();
+    setUserDrawerOpen(true);
+  }
+
   function closeUserDrawer() {
     setUserDrawerOpen(false);
+    setEditingAdminUser(null);
     resetAdminUserForm();
   }
 
@@ -2149,6 +2831,45 @@ function App() {
     }
 
     return fallback;
+  }
+
+  async function loadDistrictOptions() {
+    try {
+      const response = await api.get<AdminDistrictSummary[]>(
+        "/admin-areas/districts",
+      );
+      setDistrictOptions(
+        uniqueSortedOptions(response.data.map((district) => district.name)),
+      );
+    } catch {
+      setDistrictOptions([]);
+    }
+  }
+
+  async function ensureDistrictAreas(district: string) {
+    const districtName = district.trim();
+    if (!districtName || areaOptionsByDistrict[districtName]) return;
+
+    try {
+      const response = await api.get<AdminDistrictAreas>("/admin-areas/areas", {
+        params: { district: districtName },
+      });
+      const areas = flattenDistrictAreas(response.data);
+      setAreaOptionsByDistrict((current) => ({
+        ...current,
+        [districtName]: areas,
+        [response.data.name]: areas,
+      }));
+    } catch {
+      setAreaOptionsByDistrict((current) => ({
+        ...current,
+        [districtName]: [],
+      }));
+    }
+  }
+
+  function getAreaOptions(district: string) {
+    return areaOptionsByDistrict[district.trim()] ?? [];
   }
 
   async function loadPublicContent(currentFilters?: typeof filters) {
@@ -2438,9 +3159,10 @@ function App() {
     event.preventDefault();
     if (!user) return;
 
-    setFormSubmitting("admin-user-create", true);
+    const formKey = editingAdminUser ? "admin-user-edit" : "admin-user-create";
+    setFormSubmitting(formKey, true);
     try {
-      await api.post<User>("/users", {
+      const payload = {
         username: adminUserForm.username,
         email: adminUserForm.email,
         phone_number: adminUserForm.phone_number,
@@ -2451,18 +3173,28 @@ function App() {
         full_name:
           `${adminUserForm.first_name} ${adminUserForm.last_name}`.trim() ||
           adminUserForm.email,
-        password: adminUserForm.password,
-      });
+      };
+      if (editingAdminUser) {
+        await api.patch<User>(`/users/${editingAdminUser.id}`, payload);
+      } else {
+        await api.post<User>("/users", {
+          ...payload,
+          password: adminUserForm.password,
+        });
+      }
       closeUserDrawer();
       await loadDashboard(user);
-      showFormAlert("success", "User added successfully.");
+      showFormAlert(
+        "success",
+        editingAdminUser ? "User updated successfully." : "User added successfully.",
+      );
     } catch (error) {
       showFormAlert(
         "error",
-        getApiErrorMessage(error, "Unable to add this user right now."),
+        getApiErrorMessage(error, "Unable to save this user right now."),
       );
     } finally {
-      setFormSubmitting("admin-user-create", false);
+      setFormSubmitting(formKey, false);
     }
   }
 
@@ -2563,8 +3295,8 @@ function App() {
         title_transfer_charges: listingForm.title_transfer_charges
           ? Number(listingForm.title_transfer_charges)
           : null,
-        status: "available",
-        approval_status: "approved",
+        status: "pending",
+        approval_status: "pending",
       });
       setListingForm({
         title: "",
@@ -2575,7 +3307,7 @@ function App() {
         address: "",
         category: "Residential Land",
         size_text: "",
-        purpose: "Residential",
+        purpose: "",
         thumbnail_url: "",
         pictures: "",
         latitude: "",
@@ -2848,6 +3580,52 @@ function App() {
     setSelectedAgent(null);
   }
 
+  function handleUserActionOpen(event: MouseEvent<HTMLElement>, account: User) {
+    event.stopPropagation();
+    setSelectedAdminUser(account);
+    setUserActionAnchor(event.currentTarget);
+  }
+
+  function handleUserActionClose() {
+    setUserActionAnchor(null);
+    setSelectedAdminUser(null);
+  }
+
+  function openEditAdminUserDrawer() {
+    if (!selectedAdminUser) return;
+    setEditingAdminUser(selectedAdminUser);
+    setAdminUserForm({
+      username: selectedAdminUser.username ?? "",
+      first_name: selectedAdminUser.first_name ?? "",
+      last_name: selectedAdminUser.last_name ?? "",
+      email: selectedAdminUser.email,
+      phone_number: selectedAdminUser.phone_number ?? "",
+      password: "",
+      role: selectedAdminUser.role as "admin" | "super_admin",
+      status: selectedAdminUser.status,
+    });
+    setUserDrawerOpen(true);
+    handleUserActionClose();
+  }
+
+  async function handleAdminUserDelete() {
+    if (!selectedAdminUser || !user) return;
+
+    const account = selectedAdminUser;
+    handleUserActionClose();
+
+    try {
+      await api.delete(`/users/${account.id}`);
+      await loadDashboard(user);
+      showFormAlert("success", `${getUserDisplayName(account)} deleted.`);
+    } catch (error) {
+      showFormAlert(
+        "error",
+        getApiErrorMessage(error, "Unable to delete this user right now."),
+      );
+    }
+  }
+
   function handleListingActionOpen(
     event: MouseEvent<HTMLElement>,
     listing: Listing,
@@ -2898,19 +3676,6 @@ function App() {
     } finally {
       setFormSubmitting("listing-sale", false);
     }
-  }
-
-  function openArticlePage(listing: Listing) {
-    void registerListingView(listing.id);
-    const currentArticleState =
-      location.state as ListingArticleLocationState | null;
-    const backTo = location.pathname.startsWith("/listings/")
-      ? (currentArticleState?.backTo ?? "/")
-      : location.pathname === "/dashboard"
-        ? "/dashboard"
-        : "/";
-
-    navigate(`/listings/${listing.id}`, { state: { backTo } });
   }
 
   function openEditListingDialog() {
@@ -3191,25 +3956,35 @@ function App() {
               })
             }
           />
-          <TextField
-            label="District"
-            value={profileForm.district}
-            onChange={(event) =>
-              setProfileForm({
-                ...profileForm,
-                district: event.target.value,
-              })
+          <Autocomplete
+            freeSolo
+            options={districtOptions}
+            value={profileForm.district || null}
+            inputValue={profileForm.district}
+            onInputChange={(_event, value) =>
+              setProfileForm((current) => ({
+                ...current,
+                district: value,
+                village: value === current.district ? current.village : "",
+              }))
             }
+            renderInput={(params) => <TextField {...params} label="District" />}
           />
-          <TextField
-            label="Village / area"
-            value={profileForm.village}
-            onChange={(event) =>
-              setProfileForm({
-                ...profileForm,
-                village: event.target.value,
-              })
+          <Autocomplete
+            freeSolo
+            options={getAreaOptions(profileForm.district)}
+            value={profileForm.village || null}
+            inputValue={profileForm.village}
+            disabled={!profileForm.district}
+            onInputChange={(_event, value) =>
+              setProfileForm((current) => ({
+                ...current,
+                village: value,
+              }))
             }
+            renderInput={(params) => (
+              <TextField {...params} label="Village / area" />
+            )}
           />
           <TextField
             label="Experience"
@@ -3266,6 +4041,7 @@ function App() {
         <div className="drawer-form drawer-form-compact">
           <TextField
             className="drawer-form-full"
+            size="small"
             label="Listing title"
             value={listingForm.title}
             onChange={(event) =>
@@ -3275,6 +4051,7 @@ function App() {
           />
           <TextField
             className="drawer-form-full"
+            size="small"
             label="Description"
             value={listingForm.description}
             onChange={(event) =>
@@ -3287,22 +4064,39 @@ function App() {
             minRows={3}
             required
           />
-          <TextField
-            label="District"
-            value={listingForm.district}
-            onChange={(event) =>
-              setListingForm({ ...listingForm, district: event.target.value })
+          <Autocomplete
+            freeSolo
+            size="small"
+            options={districtOptions}
+            value={listingForm.district || null}
+            inputValue={listingForm.district}
+            onInputChange={(_event, value) =>
+              setListingForm((current) => ({
+                ...current,
+                district: value,
+                city: value === current.district ? current.city : "",
+              }))
             }
-            required
+            renderInput={(params) => (
+              <TextField {...params} size="small" label="District" required />
+            )}
+          />
+          <Autocomplete
+            freeSolo
+            size="small"
+            options={getAreaOptions(listingForm.district)}
+            value={listingForm.city || null}
+            inputValue={listingForm.city}
+            disabled={!listingForm.district}
+            onInputChange={(_event, value) =>
+              setListingForm((current) => ({ ...current, city: value }))
+            }
+            renderInput={(params) => (
+              <TextField {...params} size="small" label="Area" />
+            )}
           />
           <TextField
-            label="City"
-            value={listingForm.city}
-            onChange={(event) =>
-              setListingForm({ ...listingForm, city: event.target.value })
-            }
-          />
-          <TextField
+            size="small"
             label="Address"
             value={listingForm.address}
             onChange={(event) =>
@@ -3310,6 +4104,7 @@ function App() {
             }
           />
           <TextField
+            size="small"
             label="Category"
             value={listingForm.category}
             onChange={(event) =>
@@ -3317,13 +4112,22 @@ function App() {
             }
           />
           <TextField
+            size="small"
             label="Purpose"
+            select
             value={listingForm.purpose}
             onChange={(event) =>
               setListingForm({ ...listingForm, purpose: event.target.value })
             }
-          />
+          >
+            {["Residential", "Commercial", "Mixed Purpose"].map((purpose) => (
+              <MenuItem key={purpose} value={purpose}>
+                {purpose}
+              </MenuItem>
+            ))}
+          </TextField>
           <TextField
+            size="small"
             label="Size"
             value={listingForm.size_text}
             onChange={(event) =>
@@ -3331,6 +4135,7 @@ function App() {
             }
           />
           <TextField
+            size="small"
             label="Price"
             value={listingForm.price}
             onChange={(event) =>
@@ -3346,6 +4151,7 @@ function App() {
             }}
           />
           <TextField
+            size="small"
             label="Title transfer charges"
             value={listingForm.title_transfer_charges}
             onChange={(event) =>
@@ -3356,6 +4162,7 @@ function App() {
             }
           />
           <TextField
+            size="small"
             label="Latitude"
             value={listingForm.latitude}
             onChange={(event) =>
@@ -3363,6 +4170,7 @@ function App() {
             }
           />
           <TextField
+            size="small"
             label="Longitude"
             value={listingForm.longitude}
             onChange={(event) =>
@@ -3824,59 +4632,64 @@ function App() {
         </div>
         {analyticsTab === "listings" ? (
           <Box className="analytics-chart-shell">
-            <BarChart
-              height={260}
-              xAxis={[
-                {
-                  scaleType: "band",
-                  data: ["Views", "Offers", "Site Visits", "Sales"],
-                },
-              ]}
-              series={[
-                {
-                  data: [
-                    filteredAnalyticsListings.reduce(
-                      (sum, listing) => sum + listing.total_views,
-                      0,
-                    ),
-                    filteredAnalyticsListings.reduce(
-                      (sum, listing) => sum + getListingOfferCount(listing.id),
-                      0,
-                    ),
-                    filteredAnalyticsListings.reduce(
-                      (sum, listing) => sum + getListingSiteVisitCount(listing.id),
-                      0,
-                    ),
-                    filteredAnalyticsListings.reduce(
-                      (sum, listing) => sum + (listing.total_sales ?? 0),
-                      0,
-                    ),
-                  ],
-                },
-              ]}
-            />
+            <Box className="analytics-chart-scroll">
+              <BarChart
+                height={isMobileDashboard ? 220 : 260}
+                xAxis={[
+                  {
+                    scaleType: "band",
+                    data: ["Views", "Offers", "Site Visits", "Sales"],
+                  },
+                ]}
+                series={[
+                  {
+                    data: [
+                      filteredAnalyticsListings.reduce(
+                        (sum, listing) => sum + listing.total_views,
+                        0,
+                      ),
+                      filteredAnalyticsListings.reduce(
+                        (sum, listing) => sum + getListingOfferCount(listing.id),
+                        0,
+                      ),
+                      filteredAnalyticsListings.reduce(
+                        (sum, listing) =>
+                          sum + getListingSiteVisitCount(listing.id),
+                        0,
+                      ),
+                      filteredAnalyticsListings.reduce(
+                        (sum, listing) => sum + (listing.total_sales ?? 0),
+                        0,
+                      ),
+                    ],
+                  },
+                ]}
+              />
+            </Box>
           </Box>
         ) : analyticsTab === "site" ? (
           <Box className="analytics-chart-shell">
-            <BarChart
-              height={260}
-              xAxis={[
-                {
-                  scaleType: "band",
-                  data: ["System Usage", "Site Visits", "Offers", "Wishes"],
-                },
-              ]}
-              series={[
-                {
-                  data: [
-                    totalSystemUsers,
-                    filteredAnalyticsSiteVisits.length,
-                    offers.length,
-                    wishes.length,
-                  ],
-                },
-              ]}
-            />
+            <Box className="analytics-chart-scroll">
+              <BarChart
+                height={isMobileDashboard ? 220 : 260}
+                xAxis={[
+                  {
+                    scaleType: "band",
+                    data: ["System Usage", "Site Visits", "Offers", "Wishes"],
+                  },
+                ]}
+                series={[
+                  {
+                    data: [
+                      totalSystemUsers,
+                      filteredAnalyticsSiteVisits.length,
+                      offers.length,
+                      wishes.length,
+                    ],
+                  },
+                ]}
+              />
+            </Box>
           </Box>
         ) : null}
         <Box className="dashboard-grid-shell">
@@ -3899,6 +4712,13 @@ function App() {
             pageSizeOptions={[5, 10, 25]}
             initialState={{ pagination: { paginationModel: { pageSize: 5 } } }}
             slots={{ toolbar: DashboardGridToolbar }}
+            sx={{
+              minWidth: isMobileDashboard
+                ? analyticsTab === "site"
+                  ? 420
+                  : 720
+                : undefined,
+            }}
           />
         </Box>
       </Paper>
@@ -3956,6 +4776,22 @@ function App() {
       { field: "status_label", headerName: "Status", width: 140 },
       { field: "phone_number", headerName: "Mobile", width: 160 },
       { field: "created_at_display", headerName: "Created", width: 210 },
+      {
+        field: "actions",
+        headerName: "Actions",
+        width: 100,
+        sortable: false,
+        filterable: false,
+        renderCell: (params) => (
+          <IconButton
+            size="small"
+            aria-label={`Open actions for ${params.row.name}`}
+            onClick={(event) => handleUserActionOpen(event, params.row as User)}
+          >
+            <MoreVertIcon fontSize="small" />
+          </IconButton>
+        ),
+      },
     ];
 
     return (
@@ -3971,7 +4807,7 @@ function App() {
             <Button
               variant="contained"
               startIcon={<PeopleAltIcon />}
-              onClick={() => setUserDrawerOpen(true)}
+              onClick={openAddUserDrawer}
             >
               Add user
             </Button>
@@ -4042,7 +4878,12 @@ function App() {
                     siteVisitCount={getListingSiteVisitCount(listing.id)}
                     onRegisterView={registerListingView}
                     onOpenActions={handleListingActionOpen}
-                    onOpenArticle={openArticlePage}
+                    onOpenOffers={(listing) =>
+                      openListingRecordsDialog("offers", listing)
+                    }
+                    onOpenSiteVisits={(listing) =>
+                      openListingRecordsDialog("siteVisits", listing)
+                    }
                   />
                 ))}
               </div>
@@ -4086,10 +4927,14 @@ function App() {
             </Button>
           </div>
           {visibleDashboardListings.length ? (
-            <div className="listing-grid">
+            <Grid container spacing={3} className="dashboard-mui-card-grid">
               {visibleDashboardListings.map((listing) => (
-                <DashboardListingCard
+                <Grid
                   key={listing.id}
+                  className="dashboard-card-grid-cell"
+                  size={{ xs: 12, md: 6, lg: 4 }}
+                >
+                <DashboardListingCard
                   listing={listing}
                   authorName={getListingAuthorName(listing)}
                   authorApproved={["approved", "active"].includes(
@@ -4099,10 +4944,16 @@ function App() {
                   siteVisitCount={getListingSiteVisitCount(listing.id)}
                   onRegisterView={registerListingView}
                   onOpenActions={handleListingActionOpen}
-                  onOpenArticle={openArticlePage}
+                  onOpenOffers={(listing) =>
+                    openListingRecordsDialog("offers", listing)
+                  }
+                  onOpenSiteVisits={(listing) =>
+                    openListingRecordsDialog("siteVisits", listing)
+                  }
                 />
+                </Grid>
               ))}
-            </div>
+            </Grid>
           ) : (
             <Box className="dashboard-empty-state">
               <Typography variant="h6">No listings here yet.</Typography>
@@ -4119,10 +4970,9 @@ function App() {
           visibleDashboardListings.length ? (
             <Box
               ref={listingsLoadMoreRef}
-              className="dashboard-load-more-trigger"
-            >
-              <CircularProgress size={24} color="warning" />
-            </Box>
+              className="dashboard-load-more-trigger listing-lazy-load-trigger"
+              aria-hidden="true"
+            />
           ) : null}
         </Paper>
       );
@@ -4132,9 +4982,14 @@ function App() {
       return (
         <Paper className="priority-card dashboard-card-panel">
           {visibleAgents.length ? (
-            <div className="agent-grid">
+            <Grid container spacing={3} className="dashboard-mui-card-grid">
               {visibleAgents.map((agent) => (
-                <Card key={agent.id} className="agent-card" elevation={2}>
+                <Grid
+                  key={agent.id}
+                  className="dashboard-card-grid-cell"
+                  size={{ xs: 12, md: 6, lg: 4 }}
+                >
+                <Card className="agent-card" elevation={2}>
                   {!["approved", "active"].includes(agent.status) ? (
                     <div className="listing-sold-ribbon">
                       {formatStatusLabel(agent.status)}
@@ -4225,8 +5080,9 @@ function App() {
                     })()}
                   </CardContent>
                 </Card>
+                </Grid>
               ))}
-            </div>
+            </Grid>
           ) : (
             <Box className="dashboard-empty-state">
               <Typography variant="h6">No agents here yet.</Typography>
@@ -4250,14 +5106,22 @@ function App() {
     if (selectedMenu === "Wishes") {
       return (
         <Paper className="priority-card dashboard-card-panel">
-          <div className="listing-grid">
+          <Grid container spacing={3} className="dashboard-mui-card-grid">
             {wishes.map((wish) => (
-              <Card key={wish.id} className="dashboard-record-card" elevation={2}>
+              <Grid
+                key={wish.id}
+                className="dashboard-card-grid-cell"
+                size={{ xs: 12, md: 6, lg: 4 }}
+              >
+              <Card className="dashboard-record-card" elevation={2}>
               <div className="dashboard-record-thumbnail dashboard-record-thumbnail-wish">
                 <div className="listing-sold-ribbon">
                   {formatStatusLabel(wish.status)}
                 </div>
                 <FavoriteIcon />
+                <span className="dashboard-record-thumbnail-purpose">
+                  {wish.purpose || "Any purpose"}
+                </span>
               </div>
               <CardContent className="dashboard-record-content">
                 <div className="dashboard-record-title-row">
@@ -4284,22 +5148,27 @@ function App() {
                     "Location not added"}
                 </Typography>
                 <div className="dashboard-record-chip-row">
-                  <Chip size="small" label={wish.purpose || "Any purpose"} />
                   <Chip
                     size="small"
-                    variant="outlined"
-                    label={wish.price_range || "Any budget"}
+                    className="wish-amount-chip"
+                    label={formatAmountText(wish.price_range)}
                   />
                   <Chip
                     size="small"
+                    variant="outlined"
                     icon={<SpeakerNotesIcon fontSize="small" />}
                     label={`${getOperationalNoteCount("wish", wish.id)} notes`}
+                    onClick={() => {
+                      setSelectedOperationalRecord({ kind: "wish", record: wish });
+                      setNotesDialogOpen(true);
+                    }}
                   />
                 </div>
               </CardContent>
               </Card>
+              </Grid>
             ))}
-          </div>
+          </Grid>
         </Paper>
       );
     }
@@ -4307,13 +5176,14 @@ function App() {
     if (selectedMenu === "Site Visits") {
       return (
         <Paper className="priority-card dashboard-card-panel">
-          <div className="listing-grid">
+          <Grid container spacing={3} className="dashboard-mui-card-grid">
             {siteVisits.map((visit) => (
-              <Card
+              <Grid
                 key={visit.id}
-                className="dashboard-record-card"
-                elevation={2}
+                className="dashboard-card-grid-cell"
+                size={{ xs: 12, md: 6, lg: 4 }}
               >
+              <Card className="dashboard-record-card" elevation={2}>
               <div className="dashboard-record-thumbnail dashboard-record-thumbnail-visit">
                 <div className="listing-sold-ribbon">
                   {formatStatusLabel(visit.status)}
@@ -4358,12 +5228,20 @@ function App() {
                     size="small"
                     icon={<SpeakerNotesIcon fontSize="small" />}
                     label={`${getOperationalNoteCount("siteVisit", visit.id)} notes`}
+                    onClick={() => {
+                      setSelectedOperationalRecord({
+                        kind: "siteVisit",
+                        record: visit,
+                      });
+                      setNotesDialogOpen(true);
+                    }}
                   />
                 </div>
               </CardContent>
               </Card>
+              </Grid>
             ))}
-          </div>
+          </Grid>
         </Paper>
       );
     }
@@ -4371,13 +5249,14 @@ function App() {
     if (selectedMenu === "Offers") {
       return (
         <Paper className="priority-card dashboard-card-panel">
-          <div className="listing-grid">
+          <Grid container spacing={3} className="dashboard-mui-card-grid">
             {offers.map((offer) => (
-              <Card
+              <Grid
                 key={offer.id}
-                className="dashboard-record-card"
-                elevation={2}
+                className="dashboard-card-grid-cell"
+                size={{ xs: 12, md: 6, lg: 4 }}
               >
+              <Card className="dashboard-record-card" elevation={2}>
               <div className="dashboard-record-thumbnail dashboard-record-thumbnail-offer">
                 <div className="listing-sold-ribbon">
                   {formatStatusLabel(offer.status)}
@@ -4417,12 +5296,20 @@ function App() {
                     size="small"
                     icon={<SpeakerNotesIcon fontSize="small" />}
                     label={`${getOperationalNoteCount("offer", offer.id)} notes`}
+                    onClick={() => {
+                      setSelectedOperationalRecord({
+                        kind: "offer",
+                        record: offer,
+                      });
+                      setNotesDialogOpen(true);
+                    }}
                   />
                 </div>
               </CardContent>
               </Card>
+              </Grid>
             ))}
-          </div>
+          </Grid>
         </Paper>
       );
     }
@@ -4706,26 +5593,35 @@ function App() {
                 minRows={3}
                 required
               />
-              <TextField
-                label="District"
-                value={editListingForm.district}
-                onChange={(event) =>
-                  setEditListingForm({
-                    ...editListingForm,
-                    district: event.target.value,
-                  })
+              <Autocomplete
+                freeSolo
+                options={districtOptions}
+                value={editListingForm.district || null}
+                inputValue={editListingForm.district}
+                onInputChange={(_event, value) =>
+                  setEditListingForm((current) => ({
+                    ...current,
+                    district: value,
+                    city: value === current.district ? current.city : "",
+                  }))
                 }
-                required
+                renderInput={(params) => (
+                  <TextField {...params} label="District" required />
+                )}
               />
-              <TextField
-                label="City"
-                value={editListingForm.city}
-                onChange={(event) =>
-                  setEditListingForm({
-                    ...editListingForm,
-                    city: event.target.value,
-                  })
+              <Autocomplete
+                freeSolo
+                options={getAreaOptions(editListingForm.district)}
+                value={editListingForm.city || null}
+                inputValue={editListingForm.city}
+                disabled={!editListingForm.district}
+                onInputChange={(_event, value) =>
+                  setEditListingForm((current) => ({
+                    ...current,
+                    city: value,
+                  }))
                 }
+                renderInput={(params) => <TextField {...params} label="Area" />}
               />
               <TextField
                 label="Address"
@@ -4968,6 +5864,133 @@ function App() {
     );
   }
 
+  function renderListingRecordsDialog() {
+    const listing = listingRecordsDialog?.listing ?? null;
+    const listingOffers = listing ? getListingOffers(listing.id) : [];
+    const listingSiteVisits = listing ? getListingSiteVisits(listing.id) : [];
+    const isOffersDialog = listingRecordsDialog?.kind === "offers";
+
+    return (
+      <Dialog
+        open={Boolean(listingRecordsDialog)}
+        onClose={closeListingRecordsDialog}
+        fullWidth
+        maxWidth="md"
+      >
+        <DialogTitle>
+          {isOffersDialog ? "Listing Offers" : "Listing Site Visits"}
+        </DialogTitle>
+        <DialogContent dividers>
+          {listing ? (
+            <Stack spacing={2.5}>
+              <Box>
+                <Typography variant="h6">{listing.title}</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {[listing.district, listing.city, listing.size_text]
+                    .filter(Boolean)
+                    .join(", ")}
+                </Typography>
+              </Box>
+              {isOffersDialog ? (
+                listingOffers.length ? (
+                  <div className="listing-record-dialog-list">
+                    {listingOffers.map((offer) => (
+                      <Paper
+                        key={offer.id}
+                        variant="outlined"
+                        className="listing-record-dialog-card"
+                      >
+                        <div className="dashboard-record-title-row">
+                          <Typography variant="h6">
+                            {formatPrice(offer.amount)}
+                          </Typography>
+                          <Chip
+                            size="small"
+                            label={formatStatusLabel(offer.status)}
+                            color="warning"
+                            variant="outlined"
+                          />
+                        </div>
+                        <Typography variant="body2" color="text.secondary">
+                          {offer.full_name} | {offer.email}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {offer.mobile_number}
+                        </Typography>
+                        {offer.created_at ? (
+                          <Typography variant="caption" color="text.secondary">
+                            Submitted{" "}
+                            {new Date(offer.created_at).toLocaleString()}
+                          </Typography>
+                        ) : null}
+                      </Paper>
+                    ))}
+                  </div>
+                ) : (
+                  <Box className="dashboard-empty-state">
+                    <Typography variant="h6">No offers yet.</Typography>
+                    <Typography color="text.secondary">
+                      Offers submitted for this listing will appear here.
+                    </Typography>
+                  </Box>
+                )
+              ) : listingSiteVisits.length ? (
+                <div className="listing-record-dialog-list">
+                  {listingSiteVisits.map((visit) => (
+                    <Paper
+                      key={visit.id}
+                      variant="outlined"
+                      className="listing-record-dialog-card"
+                    >
+                      <div className="dashboard-record-title-row">
+                        <Typography variant="h6">
+                          {visit.customer_name}
+                        </Typography>
+                        <Chip
+                          size="small"
+                          label={formatStatusLabel(visit.status)}
+                          color="primary"
+                          variant="outlined"
+                        />
+                      </div>
+                      <Typography variant="body2" color="text.secondary">
+                        {visit.customer_email} | {visit.customer_mobile_number}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {visit.scheduled_date} at {visit.scheduled_time}
+                      </Typography>
+                      {visit.message ? (
+                        <Typography variant="body2" color="text.secondary">
+                          {visit.message}
+                        </Typography>
+                      ) : null}
+                      {visit.created_at ? (
+                        <Typography variant="caption" color="text.secondary">
+                          Requested{" "}
+                          {new Date(visit.created_at).toLocaleString()}
+                        </Typography>
+                      ) : null}
+                    </Paper>
+                  ))}
+                </div>
+              ) : (
+                <Box className="dashboard-empty-state">
+                  <Typography variant="h6">No site visits yet.</Typography>
+                  <Typography color="text.secondary">
+                    Site visit requests for this listing will appear here.
+                  </Typography>
+                </Box>
+              )}
+            </Stack>
+          ) : null}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeListingRecordsDialog}>Close</Button>
+        </DialogActions>
+      </Dialog>
+    );
+  }
+
   const renderTopBar = () => (
     <Box
       sx={{
@@ -5005,17 +6028,20 @@ function App() {
     </Box>
   );
 
-  const renderAppShellBar = (showDashboardToggle = false) => (
-    <AppBar
-      position="sticky"
-      color="transparent"
-      elevation={0}
-      sx={{
-        backdropFilter: "blur(12px)",
-        bgcolor: "rgba(255,252,247,0.96)",
-        borderBottom: "1px solid rgba(17,17,17,0.08)",
-      }}
-    >
+  const renderAppShellBar = (showDashboardToggle = false) => {
+    const isDashboardShell = showDashboardToggle && Boolean(user);
+
+    return (
+      <AppBar
+        position="sticky"
+        color="transparent"
+        elevation={0}
+        sx={{
+          backdropFilter: "blur(12px)",
+          bgcolor: "rgba(255,252,247,0.96)",
+          borderBottom: "1px solid rgba(17,17,17,0.08)",
+        }}
+      >
       <Container maxWidth="xl">
         <Toolbar
           disableGutters
@@ -5059,33 +6085,50 @@ function App() {
               >
                 Home
               </Button>
-              <Button
-                onClick={(event) => setAboutAnchor(event.currentTarget)}
-                sx={getAppbarNavButtonSx("/about")}
-              >
-                About
-              </Button>
-              <Button
-                component={Link}
-                to="/contact"
-                sx={getAppbarNavButtonSx("/contact")}
-              >
-                Contact Us
-              </Button>
-              <Button
-                component={Link}
-                to="/blog"
-                sx={getAppbarNavButtonSx("/blog")}
-              >
-                Blog
-              </Button>
-              <Button
-                component={Link}
-                to="/bonus-info"
-                sx={getAppbarNavButtonSx("/bonus-info")}
-              >
-                Bonus Info
-              </Button>
+              {isDashboardShell ? (
+                <Chip
+                  icon={<PersonIcon fontSize="small" />}
+                  label={getUserDisplayName(user)}
+                  variant="filled"
+                  sx={{
+                    border: 0,
+                    borderRadius: 0,
+                    bgcolor: "transparent",
+                    color: "rgba(17,17,17,0.82)",
+                    "& .MuiChip-icon": {
+                      color: "inherit",
+                    },
+                    "&:hover": {
+                      bgcolor: "rgba(239,91,43,0.08)",
+                      color: "#ef5b2b",
+                    },
+                  }}
+                />
+              ) : null}
+              {!isDashboardShell ? (
+                <>
+                  <Button
+                    onClick={(event) => setAboutAnchor(event.currentTarget)}
+                    sx={getAppbarNavButtonSx("/about")}
+                  >
+                    About
+                  </Button>
+                  <Button
+                    component={Link}
+                    to="/contact"
+                    sx={getAppbarNavButtonSx("/contact")}
+                  >
+                    Contact Us
+                  </Button>
+                  <Button
+                    component={Link}
+                    to="/blog"
+                    sx={getAppbarNavButtonSx("/blog")}
+                  >
+                    Blog
+                  </Button>
+                </>
+              ) : null}
             </>
             <IconButton
               onClick={(event) => setAccountAnchor(event.currentTarget)}
@@ -5133,7 +6176,8 @@ function App() {
         </Toolbar>
       </Container>
     </AppBar>
-  );
+    );
+  };
 
   const renderAboutMenu = () => (
     <Menu
@@ -5146,21 +6190,35 @@ function App() {
         to="/about"
         onClick={() => setAboutAnchor(null)}
       >
+        Overview
+      </MenuItem>
+      <MenuItem
+        component={Link}
+        to="/about#values"
+        onClick={() => setAboutAnchor(null)}
+      >
         Our Values
       </MenuItem>
       <MenuItem
         component={Link}
-        to="/about"
+        to="/about#mission"
         onClick={() => setAboutAnchor(null)}
       >
         Mission & Vision
       </MenuItem>
       <MenuItem
         component={Link}
-        to="/about"
+        to="/about#objectives"
         onClick={() => setAboutAnchor(null)}
       >
         Our Objectives
+      </MenuItem>
+      <MenuItem
+        component={Link}
+        to="/about#guidance"
+        onClick={() => setAboutAnchor(null)}
+      >
+        Guidance
       </MenuItem>
     </Menu>
   );
@@ -5256,22 +6314,19 @@ function App() {
         <HomeIcon fontSize="small" sx={{ mr: 1 }} />
         Home
       </MenuItem>
-      <MenuItem component={Link} to="/about" onClick={handleMobileNavClose}>
-        About
-      </MenuItem>
-      <MenuItem component={Link} to="/contact" onClick={handleMobileNavClose}>
-        Contact Us
-      </MenuItem>
-      <MenuItem component={Link} to="/blog" onClick={handleMobileNavClose}>
-        Blog
-      </MenuItem>
-      <MenuItem
-        component={Link}
-        to="/bonus-info"
-        onClick={handleMobileNavClose}
-      >
-        Bonus Info
-      </MenuItem>
+      {isDashboardRoute && user ? null : (
+        <>
+          <MenuItem component={Link} to="/about" onClick={handleMobileNavClose}>
+            About
+          </MenuItem>
+          <MenuItem component={Link} to="/contact" onClick={handleMobileNavClose}>
+            Contact Us
+          </MenuItem>
+          <MenuItem component={Link} to="/blog" onClick={handleMobileNavClose}>
+            Blog
+          </MenuItem>
+        </>
+      )}
     </Menu>
   );
 
@@ -5499,7 +6554,7 @@ function App() {
             Copyright 2026 Solvent Asset Management Ltd. All rights reserved.
           </Typography>
           <Typography variant="body1" sx={{ opacity: "70%" }}>
-            Designed by Skylab
+            Designed by GoodTech Solutions
           </Typography>
         </div>
       </Container>
@@ -5516,6 +6571,80 @@ function App() {
 
   if (user && isDashboardRoute) {
     const menuItems = getDashboardMenuItems(user);
+    const renderDashboardSidebarContent = (expanded = sidebarOpen) => (
+      <>
+        {menuItems.map((item) => {
+          const badgeCount = getDashboardMenuBadgeCount(item);
+          const menuButton = (
+            <button
+              type="button"
+              className={`mini-item${selectedMenu === item ? " mini-item-selected" : ""}`}
+              onClick={() => {
+                setSelectedMenu(item);
+                if (isMobileDashboard) {
+                  setSidebarOpen(false);
+                }
+              }}
+            >
+              <span className="mini-item-icon">
+                {!expanded && badgeCount > 0 ? (
+                  <Badge
+                    variant="dot"
+                    color="warning"
+                    className="mini-item-icon-badge"
+                  >
+                    {dashboardMenuIcons[item]}
+                  </Badge>
+                ) : (
+                  dashboardMenuIcons[item]
+                )}
+              </span>
+              {expanded ? (
+                <span className="mini-item-label">
+                  {item}
+                  {badgeCount > 0 ? (
+                    <Badge
+                      badgeContent={badgeCount}
+                      color="warning"
+                      className="mini-item-inline-badge"
+                    />
+                  ) : null}
+                </span>
+              ) : null}
+            </button>
+          );
+
+          return expanded ? (
+            <span key={item}>{menuButton}</span>
+          ) : (
+            <Tooltip key={item} title={item} placement="right" arrow>
+              <span>{menuButton}</span>
+            </Tooltip>
+          );
+        })}
+        {expanded ? (
+          <div className="mini-user-card">
+            <Typography variant="caption" color="text.secondary">
+              Signed in
+            </Typography>
+            <Typography variant="subtitle2">{getUserDisplayName(user)}</Typography>
+            <Typography variant="caption" color="text.secondary">
+              {user.email}
+            </Typography>
+            <Chip
+              size="small"
+              label={formatStatusLabel(user.role)}
+              color="primary"
+              variant="outlined"
+            />
+          </div>
+        ) : (
+          <div className="mini-user-card-collapsed">
+            <PersonIcon fontSize="small" />
+          </div>
+        )}
+      </>
+    );
 
     return (
       <Box className="sam-shell">
@@ -5525,66 +6654,39 @@ function App() {
         {renderAccountMenu()}
         {renderMobileNavMenu()}
         <Box
-          className={`dashboard-page${sidebarOpen ? "" : " dashboard-page-collapsed"}`}
+          className={`dashboard-page${
+            user.role === "agent" ? " dashboard-page-full" : ""
+          }${sidebarOpen ? "" : " dashboard-page-collapsed"}`}
         >
-          {user.role === "admin" || user.role === "super_admin" ? (
-            <aside
-              className={`mini-drawer${sidebarOpen ? "" : " mini-drawer-collapsed"}`}
-            >
-              {menuItems.map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  className={`mini-item${selectedMenu === item ? " mini-item-selected" : ""}`}
-                  onClick={() => setSelectedMenu(item)}
+          {user.role === "admin" || user.role === "super_admin" || isMobileDashboard ? (
+            <>
+              {!isMobileDashboard ? (
+                <aside
+                  className={`mini-drawer${
+                    sidebarOpen ? "" : " mini-drawer-collapsed"
+                  }`}
                 >
-                  <span className="mini-item-icon">
-                    {dashboardMenuIcons[item]}
-                  </span>
-                  {sidebarOpen ? (
-                    <span className="mini-item-label">
-                      {item}
-                      {getDashboardMenuBadgeCount(item) > 0 ? (
-                        <Badge
-                          badgeContent={getDashboardMenuBadgeCount(item)}
-                          color="warning"
-                          className="mini-item-inline-badge"
-                        />
-                      ) : null}
-                    </span>
-                  ) : getDashboardMenuBadgeCount(item) > 0 ? (
-                    <Badge
-                      badgeContent={getDashboardMenuBadgeCount(item)}
-                      color="warning"
-                      className="mini-item-inline-badge"
-                    />
-                  ) : null}
-                </button>
-              ))}
-              {sidebarOpen ? (
-                <div className="mini-user-card">
-                  <Typography variant="caption" color="text.secondary">
-                    Signed in
-                  </Typography>
-                  <Typography variant="subtitle2">
-                    {getUserDisplayName(user)}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    {user.email}
-                  </Typography>
-                  <Chip
-                    size="small"
-                    label={formatStatusLabel(user.role)}
-                    color="primary"
-                    variant="outlined"
-                  />
-                </div>
-              ) : (
-                <div className="mini-user-card-collapsed">
-                  <PersonIcon fontSize="small" />
-                </div>
-              )}
-            </aside>
+                  {renderDashboardSidebarContent()}
+                </aside>
+              ) : null}
+              <Drawer
+                anchor="left"
+                open={isMobileDashboard && sidebarOpen}
+                onClose={() => setSidebarOpen(false)}
+                sx={{
+                  display: { xs: "block", md: "none" },
+                  "& .MuiDrawer-paper": {
+                    width: "min(320px, 86vw)",
+                    background:
+                      "linear-gradient(180deg, #f8f4ee 0%, #f3ede4 100%)",
+                  },
+                }}
+              >
+                <Box className="mini-drawer mini-drawer-mobile">
+                  {renderDashboardSidebarContent(true)}
+                </Box>
+              </Drawer>
+            </>
           ) : null}
           <main className="dashboard-main">
             {dashboardLoading ? (
@@ -5653,10 +6755,23 @@ function App() {
           open={Boolean(recordActionAnchor)}
           onClose={closeRecordActionMenu}
         >
-          <MenuItem onClick={openProgressDialog}>Change Progress</MenuItem>
-          <MenuItem onClick={openNoteDialog}>Add Note</MenuItem>
+          <MenuItem onClick={openProgressDialog}>
+            <PublishedWithChangesIcon fontSize="small" sx={{ mr: 1 }} />
+            Change Progress
+          </MenuItem>
+          <MenuItem onClick={openNoteDialog}>
+            <SpeakerNotesIcon fontSize="small" sx={{ mr: 1 }} />
+            Add Note
+          </MenuItem>
+          {selectedOperationalRecord ? (
+            <MenuItem onClick={openViewNotesDialog}>
+              <VisibilityOutlinedIcon fontSize="small" sx={{ mr: 1 }} />
+              View Notes
+            </MenuItem>
+          ) : null}
           {selectedOperationalRecord?.kind === "wish" ? (
             <MenuItem onClick={openForwardWishDialog}>
+              <ForwardToInboxIcon fontSize="small" sx={{ mr: 1 }} />
               Forward
             </MenuItem>
           ) : null}
@@ -5841,14 +6956,71 @@ function App() {
             </DialogActions>
           </Box>
         </Dialog>
+        <Dialog
+          open={notesDialogOpen}
+          onClose={closeOperationalDialogs}
+          fullWidth
+          maxWidth="sm"
+        >
+          <DialogTitle>
+            Notes for {getOperationalRecordTitle(selectedOperationalRecord)}
+          </DialogTitle>
+          <DialogContent dividers>
+            {selectedOperationalRecord ? (
+              getOperationalNotes(
+                selectedOperationalRecord.kind,
+                selectedOperationalRecord.record.id,
+              ).length ? (
+                <Stack spacing={2}>
+                  {getOperationalNotes(
+                    selectedOperationalRecord.kind,
+                    selectedOperationalRecord.record.id,
+                  ).map((note) => (
+                    <Paper key={note.id} variant="outlined" sx={{ p: 2 }}>
+                      <Typography variant="body1">{note.content}</Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {[
+                          note.user_id
+                            ? getUserDisplayName(
+                                usersDirectory.find(
+                                  (account) => account.id === note.user_id,
+                                ) ?? (user?.id === note.user_id ? user : null),
+                              )
+                            : "",
+                          note.created_at
+                            ? new Date(note.created_at).toLocaleString()
+                            : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" | ")}
+                      </Typography>
+                    </Paper>
+                  ))}
+                </Stack>
+              ) : (
+                <Box className="dashboard-empty-state">
+                  <Typography variant="h6">No notes yet.</Typography>
+                  <Typography color="text.secondary">
+                    Added notes will appear here.
+                  </Typography>
+                </Box>
+              )
+            ) : null}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={closeOperationalDialogs}>Close</Button>
+          </DialogActions>
+        </Dialog>
         <Drawer anchor="right" open={userDrawerOpen} onClose={closeUserDrawer}>
           <Box sx={{ width: { xs: 360, sm: 440 }, p: 3 }}>
             <Box component="form" onSubmit={handleAdminUserSubmit}>
               <Typography variant="h4" sx={{ mb: 1 }}>
-                Add User
+                {editingAdminUser ? "Edit User" : "Add User"}
               </Typography>
               <Typography color="text.secondary" sx={{ mb: 3 }}>
-                Create a Super Admin or Admin account.
+                {editingAdminUser
+                  ? "Update this Super Admin or Admin account."
+                  : "Create a Super Admin or Admin account."}
               </Typography>
               <div className="drawer-form drawer-form-compact">
                 <TextField
@@ -5923,19 +7095,40 @@ function App() {
                   <MenuItem value="super_admin">Super Admin</MenuItem>
                 </TextField>
                 <TextField
-                  className="drawer-form-full"
-                  label="Password"
-                  type="password"
-                  value={adminUserForm.password}
+                  select
+                  label="Status"
+                  value={adminUserForm.status}
                   onChange={(event) =>
                     setAdminUserForm({
                       ...adminUserForm,
-                      password: event.target.value,
+                      status: event.target.value,
                     })
                   }
-                  required
-                  helperText="Use at least 8 characters."
-                />
+                >
+                  {["active", "approved", "pending", "deactivated", "rejected"].map(
+                    (status) => (
+                      <MenuItem key={status} value={status}>
+                        {formatStatusLabel(status)}
+                      </MenuItem>
+                    ),
+                  )}
+                </TextField>
+                {!editingAdminUser ? (
+                  <TextField
+                    className="drawer-form-full"
+                    label="Password"
+                    type="password"
+                    value={adminUserForm.password}
+                    onChange={(event) =>
+                      setAdminUserForm({
+                        ...adminUserForm,
+                        password: event.target.value,
+                      })
+                    }
+                    required
+                    helperText="Use at least 8 characters."
+                  />
+                ) : null}
                 <Box className="drawer-actions">
                   <Button variant="outlined" size="large" onClick={closeUserDrawer}>
                     Close
@@ -5944,10 +7137,14 @@ function App() {
                     type="submit"
                     variant="contained"
                     size="large"
-                    disabled={isSubmitting("admin-user-create")}
-                    startIcon={getSubmitProgress("admin-user-create")}
+                    disabled={isSubmitting(
+                      editingAdminUser ? "admin-user-edit" : "admin-user-create",
+                    )}
+                    startIcon={getSubmitProgress(
+                      editingAdminUser ? "admin-user-edit" : "admin-user-create",
+                    )}
                   >
-                    Add user
+                    {editingAdminUser ? "Save user" : "Add user"}
                   </Button>
                 </Box>
               </div>
@@ -6162,6 +7359,24 @@ function App() {
           </Box>
         </Drawer>
         <Menu
+          anchorEl={userActionAnchor}
+          open={Boolean(userActionAnchor)}
+          onClose={handleUserActionClose}
+          slotProps={{ paper: { sx: { width: 220 } } }}
+        >
+          <MenuItem onClick={openEditAdminUserDrawer}>
+            <EditIcon fontSize="small" sx={{ mr: 1 }} />
+            Edit
+          </MenuItem>
+          <MenuItem
+            onClick={() => void handleAdminUserDelete()}
+            disabled={selectedAdminUser?.id === user?.id}
+          >
+            <DeleteIcon fontSize="small" sx={{ mr: 1 }} />
+            Delete
+          </MenuItem>
+        </Menu>
+        <Menu
           anchorEl={agentActionAnchor}
           open={Boolean(agentActionAnchor)}
           onClose={handleAgentActionClose}
@@ -6286,6 +7501,7 @@ function App() {
         {renderEditListingDialog()}
         {renderListingPicturesDialog()}
         {renderListingFeaturesDialog()}
+        {renderListingRecordsDialog()}
         <Dialog open={saleDialogOpen} onClose={closeSaleDialog} fullWidth maxWidth="xs">
           <Box component="form" onSubmit={handleListingSaleSubmit}>
             <DialogTitle>Register Listing Sale</DialogTitle>
@@ -6369,6 +7585,7 @@ function App() {
                 listingsLoading={listingsLoading}
                 homeListingsTab={homeListingsTab}
                 filters={filters}
+                districtOptions={districtOptions}
                 slideIndex={slideIndex}
                 setFilters={setFilters}
                 setHomeListingsTab={setHomeListingsTab}
@@ -6379,7 +7596,6 @@ function App() {
                 onOpenWish={openWishDrawer}
                 onOpenSiteVisit={openSiteVisitDrawer}
                 onOpenOffer={openOfferDrawer}
-                onOpenArticle={openArticlePage}
                 onRegisterView={registerListingView}
               />
             }
@@ -6391,19 +7607,17 @@ function App() {
                 listings={[...featuredListings, ...latestListings]}
                 onOpenSiteVisit={openSiteVisitDrawer}
                 onOpenOffer={openOfferDrawer}
-                onOpenArticle={openArticlePage}
                 onRegisterView={registerListingView}
                 getViewerKey={getViewerKey}
               />
             }
           />
-          <Route path="/about" element={<AboutPage />} />
+          <Route
+            path="/about"
+            element={<AboutPage bonusSections={bonusSections} />}
+          />
           <Route path="/contact" element={<ContactPage />} />
           <Route path="/blog" element={<BlogPage />} />
-          <Route
-            path="/bonus-info"
-            element={<BonusInfoPage bonusSections={bonusSections} />}
-          />
           <Route
             path="*"
             element={
@@ -6414,6 +7628,7 @@ function App() {
                 listingsLoading={listingsLoading}
                 homeListingsTab={homeListingsTab}
                 filters={filters}
+                districtOptions={districtOptions}
                 slideIndex={slideIndex}
                 setFilters={setFilters}
                 setHomeListingsTab={setHomeListingsTab}
@@ -6424,7 +7639,6 @@ function App() {
                 onOpenWish={openWishDrawer}
                 onOpenSiteVisit={openSiteVisitDrawer}
                 onOpenOffer={openOfferDrawer}
-                onOpenArticle={openArticlePage}
                 onRegisterView={registerListingView}
               />
             }
@@ -6503,19 +7717,34 @@ function App() {
                 }
                 required
               />
-              <TextField
-                label="Preferred district"
-                value={wishForm.district}
-                onChange={(event) =>
-                  setWishForm({ ...wishForm, district: event.target.value })
+              <Autocomplete
+                freeSolo
+                options={districtOptions}
+                value={wishForm.district || null}
+                inputValue={wishForm.district}
+                onInputChange={(_event, value) =>
+                  setWishForm((current) => ({
+                    ...current,
+                    district: value,
+                    village: value === current.district ? current.village : "",
+                  }))
                 }
+                renderInput={(params) => (
+                  <TextField {...params} label="Preferred district" />
+                )}
               />
-              <TextField
-                label="Village / area"
-                value={wishForm.village}
-                onChange={(event) =>
-                  setWishForm({ ...wishForm, village: event.target.value })
+              <Autocomplete
+                freeSolo
+                options={getAreaOptions(wishForm.district)}
+                value={wishForm.village || null}
+                inputValue={wishForm.village}
+                disabled={!wishForm.district}
+                onInputChange={(_event, value) =>
+                  setWishForm((current) => ({ ...current, village: value }))
                 }
+                renderInput={(params) => (
+                  <TextField {...params} label="Village / area" />
+                )}
               />
               <TextField
                 label="Size range"
@@ -7026,7 +8255,13 @@ function AgentProfilePanel({
   );
 
   return (
-    <div className="agent-summary-grid">
+    <Grid
+      container
+      spacing={4}
+      columns={{ xs: 12, lg: 17 }}
+      className="agent-summary-grid"
+    >
+      <Grid className="agent-summary-cell" size={{ xs: 12, lg: 6 }}>
       <Card className="priority-card agent-profile-panel" elevation={2}>
         <div className="agent-profile-main">
           <CardMedia
@@ -7082,7 +8317,9 @@ function AgentProfilePanel({
           />
         </div>
       </Card>
+      </Grid>
 
+      <Grid className="agent-summary-cell" size={{ xs: 12, lg: 11 }}>
       <div className="agent-analytics-column">
         <Card className="priority-card agent-analytics-panel" elevation={2}>
           <div className="agent-section-header">
@@ -7100,7 +8337,8 @@ function AgentProfilePanel({
               Create listing
             </Button>
           </div>
-          <div className="agent-profile-stats">
+          <Grid container spacing={1.25} className="agent-profile-stats">
+            <Grid className="agent-stat-cell" size={{ xs: 12, sm: 6, md: 4 }}>
             <Card className="agent-mini-stat" elevation={2}>
               <div className="agent-mini-stat-title">
                 <HomeWorkIcon className="agent-mini-stat-icon" />
@@ -7108,6 +8346,8 @@ function AgentProfilePanel({
               </div>
               <Typography variant="h5">{listings.length}</Typography>
             </Card>
+            </Grid>
+            <Grid className="agent-stat-cell" size={{ xs: 12, sm: 6, md: 4 }}>
             <Card className="agent-mini-stat" elevation={2}>
               <div className="agent-mini-stat-title">
                 <CheckCircleOutlineOutlinedIcon className="agent-mini-stat-icon" />
@@ -7117,6 +8357,8 @@ function AgentProfilePanel({
               </div>
               <Typography variant="h5">{approvedListings}</Typography>
             </Card>
+            </Grid>
+            <Grid className="agent-stat-cell" size={{ xs: 12, sm: 6, md: 4 }}>
             <Card className="agent-mini-stat" elevation={2}>
               <div className="agent-mini-stat-title">
                 <CancelIcon className="agent-mini-stat-icon" />
@@ -7126,6 +8368,8 @@ function AgentProfilePanel({
               </div>
               <Typography variant="h5">{rejectedListings}</Typography>
             </Card>
+            </Grid>
+            <Grid className="agent-stat-cell" size={{ xs: 12, sm: 6, md: 4 }}>
             <Card className="agent-mini-stat" elevation={2}>
               <div className="agent-mini-stat-title">
                 <VisibilityOutlinedIcon className="agent-mini-stat-icon" />
@@ -7133,6 +8377,8 @@ function AgentProfilePanel({
               </div>
               <Typography variant="h5">{totalViews}</Typography>
             </Card>
+            </Grid>
+            <Grid className="agent-stat-cell" size={{ xs: 12, sm: 6, md: 4 }}>
             <Card className="agent-mini-stat" elevation={2}>
               <div className="agent-mini-stat-title">
                 <SellIcon className="agent-mini-stat-icon" />
@@ -7140,7 +8386,8 @@ function AgentProfilePanel({
               </div>
               <Typography variant="h5">{totalSales}</Typography>
             </Card>
-          </div>
+            </Grid>
+          </Grid>
         </Card>
 
         <Card
@@ -7178,7 +8425,7 @@ function AgentProfilePanel({
                     <Chip
                       size="small"
                       variant="outlined"
-                      label={wish.price_range || "Any budget"}
+                      label={formatAmountText(wish.price_range)}
                     />
                     <Chip
                       size="small"
@@ -7199,7 +8446,8 @@ function AgentProfilePanel({
           )}
         </Card>
       </div>
-    </div>
+      </Grid>
+    </Grid>
   );
 }
 
@@ -7211,7 +8459,8 @@ function DashboardListingCard({
   siteVisitCount,
   onRegisterView,
   onOpenActions,
-  onOpenArticle,
+  onOpenOffers,
+  onOpenSiteVisits,
 }: {
   listing: Listing;
   authorName: string;
@@ -7220,9 +8469,17 @@ function DashboardListingCard({
   siteVisitCount: number;
   onRegisterView: (listingId: number) => void;
   onOpenActions: (event: MouseEvent<HTMLElement>, listing: Listing) => void;
-  onOpenArticle: (listing: Listing) => void;
+  onOpenOffers: (listing: Listing) => void;
+  onOpenSiteVisits: (listing: Listing) => void;
 }) {
   const statusLabel = getListingStatusLabel(listing);
+  const location = useLocation();
+  const articleState = {
+    backTo: getListingArticleBackTo(
+      location.pathname,
+      location.state as ListingArticleLocationState | null,
+    ),
+  };
 
   return (
     <Card
@@ -7239,29 +8496,31 @@ function DashboardListingCard({
       {statusLabel ? (
         <div className="listing-sold-ribbon">{statusLabel}</div>
       ) : null}
-      <CardMedia
-        component="img"
-        height="220"
-        image={resolveImage(listing.thumbnail_url)}
-        alt={listing.title}
-      />
+      <div className="listing-thumbnail">
+        <CardMedia
+          component="img"
+          height="220"
+          image={resolveImage(listing.thumbnail_url)}
+          alt={listing.title}
+        />
+        <Chip
+          label={formatPrice(listing.price)}
+          size="small"
+          className="listing-thumbnail-price"
+        />
+      </div>
       <CardContent sx={{ display: "grid", gap: 1.5 }}>
         <div className="listing-top-row">
           <Chip
             label={listing.purpose ?? listing.category}
-            color="primary"
             size="small"
-          />
-          <Chip
-            label={formatPrice(listing.price)}
-            variant="outlined"
-            color="secondary"
-            size="small"
-            className="listing-amount-chip"
+            className="listing-purpose-chip"
           />
           <Chip
             label={`${listing.total_views} views`}
             size="small"
+            color="primary"
+            variant="outlined"
             className="listing-views-button"
             icon={<VisibilityOutlinedIcon fontSize="small" />}
           />
@@ -7310,16 +8569,33 @@ function DashboardListingCard({
           </Typography>
         </div>
         <div className="dashboard-listing-stats-row">
-          <Chip label={`${offerCount} Offers`} size="small" color="warning" />
+          <Chip
+            label={`${offerCount} Offers`}
+            size="small"
+            color="warning"
+            clickable
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenOffers(listing);
+            }}
+          />
           <Chip
             label={`${siteVisitCount} Site Visits`}
             size="small"
             variant="outlined"
+            color="primary"
+            clickable
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenSiteVisits(listing);
+            }}
           />
           <Button
+            component={Link}
+            to={`/listings/${listing.id}`}
+            state={articleState}
             size="small"
             variant="outlined"
-            onClick={() => onOpenArticle(listing)}
           >
             Read More
           </Button>
