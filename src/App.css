@@ -1524,6 +1524,9 @@ body {
   position: absolute;
   left: 14px;
   bottom: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   max-width: calc(100% - 28px);
   color: #ffffff;
   font-size: 1.02rem;
@@ -1531,6 +1534,11 @@ body {
   line-height: 1.2;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.65);
   overflow-wrap: anywhere;
+}
+
+.dashboard-record-thumbnail-amount .MuiSvgIcon-root {
+  font-size: 1.08em;
+  flex-shrink: 0;
 }
 
 .dashboard-record-thumbnail-wish {

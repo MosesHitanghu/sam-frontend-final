@@ -87,6 +87,7 @@ import Groups2Icon from "@mui/icons-material/Groups2";
 import FavoriteIcon from "@mui/icons-material/Favorite";
 import EventAvailableIcon from "@mui/icons-material/EventAvailable";
 import LocalOfferIcon from "@mui/icons-material/LocalOffer";
+import CleanHandsIcon from "@mui/icons-material/CleanHands";
 import DescriptionIcon from "@mui/icons-material/Description";
 import ReceiptLongIcon from "@mui/icons-material/ReceiptLong";
 import InsightsIcon from "@mui/icons-material/Insights";
@@ -5271,6 +5272,7 @@ function App() {
                 </div>
                 <LocalOfferIcon />
                 <span className="dashboard-record-thumbnail-amount">
+                  <CleanHandsIcon fontSize="inherit" />
                   {formatPrice(offer.amount)}
                 </span>
               </div>
