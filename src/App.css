@@ -1220,7 +1220,7 @@ body {
 }
 
 .listing-meta-row {
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 16px;
   flex-wrap: wrap;
 }
@@ -1238,10 +1238,22 @@ body {
   line-height: 1.3;
 }
 
+.listing-read-more-button {
+  flex-grow: 1000;
+}
+
 .listing-meta-item {
   gap: 6px;
   font-size: 0.92rem;
   font-weight: 500;
+}
+
+.listing-size-time-meta {
+  white-space: nowrap;
+}
+
+.listing-meta-separator {
+  color: rgba(17, 17, 17, 0.34);
 }
 
 .listing-views-button {
@@ -1505,6 +1517,19 @@ body {
   font-size: 0.85rem;
   font-weight: 700;
   line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.dashboard-record-thumbnail-amount {
+  position: absolute;
+  left: 14px;
+  bottom: 12px;
+  max-width: calc(100% - 28px);
+  color: #ffffff;
+  font-size: 1.02rem;
+  font-weight: 800;
+  line-height: 1.2;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.65);
   overflow-wrap: anywhere;
 }
 

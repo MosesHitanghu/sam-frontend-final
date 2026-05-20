@@ -655,15 +655,15 @@ function ListingCard({
             <PlaceOutlinedIcon fontSize="inherit" />
             {listing.district}
             {listing.city ? `, ${listing.city}` : ""}
-            {listing.size_text ? ` | ${listing.size_text}` : ""}
           </Typography>
           <Typography
             variant="body2"
-            className="listing-meta-item"
+            className="listing-meta-item listing-size-time-meta"
             color="text.secondary"
           >
-            <AccessTimeOutlinedIcon fontSize="inherit" />
-            {formatTimeSincePosted(listing.created_at)}
+            <span>{listing.size_text || "Size not added"}</span>
+            <span className="listing-meta-separator">|</span>
+            <span>{formatTimeSincePosted(listing.created_at)}</span>
           </Typography>
         </div>
         <div className="listing-actions-row">
@@ -683,6 +683,7 @@ function ListingCard({
               Site Visit
             </Button>
             <Button
+              className="listing-read-more-button"
               component={Link}
               to={`/listings/${listing.id}`}
               state={articleState}
@@ -2820,6 +2821,10 @@ function App() {
       latestListings.find((listing) => listing.id === listingId)?.title ??
       `Listing #${listingId}`
     );
+  }
+
+  function getListingById(listingId: number) {
+    return latestListings.find((listing) => listing.id === listingId) ?? null;
   }
 
   function getApiErrorMessage(error: unknown, fallback: string) {
@@ -5250,7 +5255,10 @@ function App() {
       return (
         <Paper className="priority-card dashboard-card-panel">
           <Grid container spacing={3} className="dashboard-mui-card-grid">
-            {offers.map((offer) => (
+            {offers.map((offer) => {
+              const offerListing = getListingById(offer.listing_id);
+
+              return (
               <Grid
                 key={offer.id}
                 className="dashboard-card-grid-cell"
@@ -5262,6 +5270,9 @@ function App() {
                   {formatStatusLabel(offer.status)}
                 </div>
                 <LocalOfferIcon />
+                <span className="dashboard-record-thumbnail-amount">
+                  {offerListing ? formatPrice(offerListing.price) : "Listing price unavailable"}
+                </span>
               </div>
               <CardContent className="dashboard-record-content">
                 <div className="dashboard-record-title-row">
@@ -5308,7 +5319,8 @@ function App() {
               </CardContent>
               </Card>
               </Grid>
-            ))}
+              );
+            })}
           </Grid>
         </Paper>
       );
@@ -8557,15 +8569,15 @@ function DashboardListingCard({
             <PlaceOutlinedIcon fontSize="inherit" />
             {listing.district}
             {listing.city ? `, ${listing.city}` : ""}
-            {listing.size_text ? ` | ${listing.size_text}` : ""}
           </Typography>
           <Typography
             variant="body2"
-            className="listing-meta-item"
+            className="listing-meta-item listing-size-time-meta"
             color="text.secondary"
           >
-            <AccessTimeOutlinedIcon fontSize="inherit" />
-            {formatTimeSincePosted(listing.created_at)}
+            <span>{listing.size_text || "Size not added"}</span>
+            <span className="listing-meta-separator">|</span>
+            <span>{formatTimeSincePosted(listing.created_at)}</span>
           </Typography>
         </div>
         <div className="dashboard-listing-stats-row">
@@ -8591,6 +8603,7 @@ function DashboardListingCard({
             }}
           />
           <Button
+            className="listing-read-more-button"
             component={Link}
             to={`/listings/${listing.id}`}
             state={articleState}
